@@ -202,8 +202,6 @@ function showView(name) {
   if (currentView === "aliases") { renderAliases(); refreshAliasTable(); }
   if (currentView === "session") { loadStatus(); loadAutoRefresh(); }
   if (currentView === "inbox" && !inboxLoadedOnce) { inboxLoadedOnce = true; initInbox(); }
-  if (currentView === "inbox") startMailPolling();
-  else stopMailPolling();
 }
 
 window.addEventListener("hashchange", () => {
@@ -543,7 +541,14 @@ function renderAliases() {
       <thead><tr><th>hme</th><th>label</th><th>note</th><th>forwardTo</th><th>建立時間</th><th>status</th><th>操作</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
 }
+let aliasFetchInFlight = null;
 async function refreshAliasTable() {
+  // Concurrent callers (boot view + background inbox warm-up) share one fetch.
+  if (aliasFetchInFlight) return aliasFetchInFlight;
+  aliasFetchInFlight = fetchAliasesOnce();
+  try { return await aliasFetchInFlight; } finally { aliasFetchInFlight = null; }
+}
+async function fetchAliasesOnce() {
   try {
     const response = await fetch("/v1/aliases", { headers: apiHeaders() });
     if (response.status === 401) { showModal(); return null; }
@@ -551,7 +556,7 @@ async function refreshAliasTable() {
     if (response.ok && data.ok !== false && data.data) setAliasRows(data.data);
     return data;
   } catch (error) {
-    setStatus("清單刷新失敗", true);
+    setStatus("清單刷新失敗");
     return null;
   } finally {
     if (!aliasesLoadedOnce) { aliasesLoadedOnce = true; renderAliases(); }
@@ -879,9 +884,10 @@ function resetMailCache() {
 }
 
 // ---------- inbox polling ----------
-// While the inbox is visible, quietly poll the current folder and merge new
-// messages on top. Reading state (open message, detail cache) is preserved,
-// so waiting for a verification code no longer requires manual refreshes.
+// Runs globally after unlock: quietly poll the inbox folder and merge new
+// messages on top of the cache, whichever view is active (browsers throttle
+// the timer while the tab is hidden; the visibilitychange hook catches up).
+// Reading state (open message, detail cache) is always preserved.
 function startMailPolling() {
   if (mailPollTimer !== null) return;
   mailPollTimer = window.setInterval(pollMailOnce, MAIL_POLL_MS);
@@ -895,7 +901,7 @@ function stopMailPolling() {
 }
 
 async function pollMailOnce() {
-  if (currentView !== "inbox" || document.hidden || !mailCacheFolder) return;
+  if (!mailCacheFolder) return;
   try {
     const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(mailCacheFolder)}&limit=100`, { headers: apiHeaders() });
     if (response.status === 401) { stopMailPolling(); showModal(); return; }
@@ -915,7 +921,7 @@ async function pollMailOnce() {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && currentView === "inbox") pollMailOnce();
+  if (!document.hidden) pollMailOnce();
 });
 
 // ---------- session actions ----------
@@ -976,11 +982,13 @@ async function submitImportSession() {
   $("importCurl").value = "";
   const importedRegion = data.data && data.data.region === "china" ? "中國大陸（icloud.com.cn）" : "全球（icloud.com）";
   toast(`Session 已匯入（${importedRegion}），正在刷新與同步…`, "ok");
-  inboxLoadedOnce = false; // next visit to inbox reloads with the new session
   resetMailCache();
   await refreshSessionAfterImport();
   await loadStatus();
   await refreshAliasTable();
+  // Re-warm the mail cache with the fresh session right away (background).
+  inboxLoadedOnce = true;
+  initInbox();
 }
 
 // ---------- API Key modal ----------
@@ -1132,6 +1140,10 @@ function init() {
   showView(VIEW_TITLES[initialView] ? initialView : "aliases");
   loadAutoRefresh();
   loadStatus();
+  // Warm the mail cache in the background even before the inbox is opened,
+  // then keep polling for new messages globally.
+  if (!inboxLoadedOnce) { inboxLoadedOnce = true; initInbox(); }
+  startMailPolling();
 }
 
 (async () => {
