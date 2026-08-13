@@ -7,9 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hme import HmeClient, HmeError, load_config
+from hme import HmeClient, HmeError, load_config, region_for_host
+from icloud_mail import MailClient
 
 COOKIE_PLACEHOLDER = "PASTE_AUTHORIZED_ICLOUD_WEB_COOKIE_HERE"
+SESSION_MISSING_MESSAGE = (
+    "尚未匯入 iCloud session。請先在後台「匯入 Session」貼上 /v2/hme/list 的 cURL/HAR。"
+)
 
 
 @dataclass(frozen=True)
@@ -50,14 +54,34 @@ class ICloudSessionManager:
         self.metadata_path = self.state_dir / "hme-session.json"
         self.session_state_path = self.state_dir / "session-state.json"
         self._lock = threading.RLock()
+        self._mail_client: MailClient | None = None
         self.metadata = self._load_metadata()
 
     def get_client(self) -> HmeClient:
         with self._lock:
             client = self._get_imported_cookie_client()
             if client is None:
-                raise HmeError("尚未匯入 iCloud session。請先在後台「匯入 Session」貼上 /v2/hme/list 的 cURL/HAR。")
+                raise HmeError(SESSION_MISSING_MESSAGE)
             return client
+
+    def get_mail_client(self) -> MailClient:
+        """Mail web service client backed by the same imported session.
+
+        Cached so the setup-service host resolution only runs once per import."""
+        with self._lock:
+            if self._mail_client is not None:
+                return self._mail_client
+            client = self._get_imported_cookie_client()
+            if client is None:
+                raise HmeError(SESSION_MISSING_MESSAGE)
+            self._mail_client = MailClient(client.config)
+            return self._mail_client
+
+    def reload(self) -> None:
+        """Re-read metadata after the config file changed (e.g. new import)."""
+        with self._lock:
+            self._mail_client = None
+            self.metadata = self._load_metadata()
 
     def check(self) -> dict[str, Any]:
         with self._lock:
@@ -80,6 +104,7 @@ class ICloudSessionManager:
         return {
             "metadataDetected": self.metadata is not None,
             "metadata": self.metadata.to_dict() if self.metadata else None,
+            "region": region_for_host(self.metadata.host) if self.metadata else None,
             **self._persisted_session_status(),
         }
 

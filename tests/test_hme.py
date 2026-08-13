@@ -5,7 +5,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hme import HmeClient, HmeConfig, HmeError, aliases_to_csv, load_config
+from hme import (
+    HmeClient,
+    HmeConfig,
+    HmeError,
+    aliases_to_csv,
+    default_lang_code_for_host,
+    load_config,
+    region_for_host,
+    web_origin_for_host,
+)
 
 
 class FakeTransport:
@@ -57,22 +66,6 @@ class HmeClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(HmeError, "cookie"):
             load_config(None, env={"ICLOUD_HME_HOST": "p119-maildomainws.icloud.com"})
-
-    def test_load_config_uses_china_web_domains_for_cn_host(self):
-        config = load_config(
-            None,
-            env={
-                "ICLOUD_HME_HOST": "p119-maildomainws.icloud.com.cn",
-                "ICLOUD_HME_DSID": "608658063",
-                "ICLOUD_HME_CLIENT_ID": "client-1",
-                "ICLOUD_HME_CLIENT_BUILD_NUMBER": "2614Build17",
-                "ICLOUD_HME_CLIENT_MASTERING_NUMBER": "2614Build17",
-                "ICLOUD_HME_COOKIE": "SESSION=ok",
-            },
-        )
-
-        self.assertEqual(config.origin, "https://www.icloud.com.cn")
-        self.assertEqual(config.referer, "https://www.icloud.com.cn/")
 
     def test_list_aliases_calls_v2_list_and_returns_aliases(self):
         transport = FakeTransport(
@@ -181,6 +174,59 @@ class HmeClientTests(unittest.TestCase):
         self.assertEqual(call["method"], "POST")
         self.assertIn("/v1/hme/delete?", call["url"])
         self.assertEqual(json.loads(call["body"]), {"anonymousId": "id1"})
+
+    def test_region_helpers_detect_china_partition(self):
+        self.assertEqual(region_for_host("p119-maildomainws.icloud.com"), "global")
+        self.assertEqual(region_for_host("p30-maildomainws.icloud.com.cn"), "china")
+        self.assertEqual(web_origin_for_host("p30-maildomainws.icloud.com.cn"), "https://www.icloud.com.cn")
+        self.assertEqual(web_origin_for_host("p119-maildomainws.icloud.com"), "https://www.icloud.com")
+        self.assertEqual(default_lang_code_for_host("p30-maildomainws.icloud.com.cn"), "zh-cn")
+
+    def test_load_config_defaults_origin_by_region(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "host": "p30-maildomainws.icloud.com.cn",
+                        "dsid": "12345678",
+                        "clientId": "client-cn",
+                        "clientBuildNumber": "2626Build17",
+                        "clientMasteringNumber": "2626Build17",
+                        "cookie": "SESSION=ok",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path, env={})
+
+        self.assertEqual(config.region, "china")
+        self.assertEqual(config.origin, "https://www.icloud.com.cn")
+        self.assertEqual(config.referer, "https://www.icloud.com.cn/")
+        self.assertEqual(config.lang_code, "zh-cn")
+
+    def test_china_client_sends_cn_origin_headers(self):
+        transport = FakeTransport([(200, {"success": True, "result": {"hmeEmails": []}})])
+        config = HmeConfig(
+            host="p30-maildomainws.icloud.com.cn",
+            dsid="12345678",
+            client_id="client-cn",
+            client_build_number="2626Build17",
+            client_mastering_number="2626Build17",
+            cookie="X-APPLE-WEBAUTH-TOKEN=redacted",
+            lang_code="zh-cn",
+            origin="https://www.icloud.com.cn",
+            referer="https://www.icloud.com.cn/",
+        )
+        client = HmeClient(config, transport=transport)
+
+        client.list_aliases()
+
+        call = transport.calls[0]
+        self.assertIn("https://p30-maildomainws.icloud.com.cn/v2/hme/list?", call["url"])
+        self.assertEqual(call["headers"]["Origin"], "https://www.icloud.com.cn")
+        self.assertEqual(call["headers"]["Referer"], "https://www.icloud.com.cn/")
 
     def test_aliases_to_csv_writes_stable_columns(self):
         csv_text = aliases_to_csv(

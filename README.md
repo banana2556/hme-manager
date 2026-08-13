@@ -15,12 +15,13 @@
 ## 功能
 
 - 管理「隱藏我的電子郵件」信箱：建立、列出、停用、啟用、刪除與 CSV 匯出。
+- **收件匣讀信**：用同一份 Session 直接讀 iCloud 網頁郵件（資料夾、清單、內容），自動偵測並一鍵複製驗證碼——用別名註冊服務後，驗證信不用離開工作台。
+- **雙區域支援**：全球（icloud.com）與中國大陸（icloud.com.cn）帳號皆可匯入，區域依主機自動判定，Origin/Referer/langCode 一併處理。
 - 固定格式的 HTTP API；所有 `/v1/*` 皆以 `X-API-Key` 驗證。
 - Session 只透過 iCloud 網頁請求的 **Copy as cURL (bash)** 或 HAR 匯入，不接收 Apple ID、密碼或 2FA。
-- Session 匯入可切換 **國際版**與**中國大陸版**；大陸版會使用 `icloud.com.cn` 服務域名。
 - **自動刷新**預設啟用，每 10 分鐘使用現有 Session 保活；失效時自動停用。
-- 響應式工作台：**信箱清單**、**API Builder**、**Session & 自動刷新**，支援亮／暗主題與手機版。
-- 純 Python 標準庫、**零第三方相依**；支援本機、Docker 與 Render。
+- 響應式工作台：**信箱清單**、**收件匣**、**API Builder**、**Session & 自動刷新**，支援亮／暗主題、手機版與 toast 操作回饋。
+- 純 Python 標準庫、**零第三方相依**；多執行緒 HTTP 服務；支援本機、Docker 與 Render。
 
 ## 快速開始
 
@@ -74,10 +75,11 @@ docker compose up -d --build
 
 ### 4. 匯入 Session
 
-1. 前往國際版 [iCloud+](https://www.icloud.com/icloudplus/) 或中國大陸版 [iCloud+](https://www.icloud.com.cn/icloudplus/)，開啟 **Hide My Email（隱藏我的電子郵件）**。
+1. 前往 [iCloud+](https://www.icloud.com/icloudplus/)（大陸帳號改用 [icloud.com.cn](https://www.icloud.com.cn/icloudplus/)），開啟 **Hide My Email（隱藏我的電子郵件）**。
 2. 按 **F12** 開啟 DevTools → Network，找到包含 `list?clientBuildNumber` 的請求。
 3. 對該請求選擇 **Copy as cURL (bash)**；也可匯出包含 request cookies 的 HAR。
-4. 到後台的 **Session & 自動刷新** → **手動匯入 Session**，選擇相符的 iCloud 服務區域後貼上並送出。
+4. 到後台的 **Session & 自動刷新** → **手動匯入 Session** 貼上並送出。區域（全球／中國大陸）依主機自動判定。
+5. 若要在**收件匣**讀信，匯入前請先在 iCloud 網頁開啟過一次「郵件」，確保 cookie 帶有郵件授權（`X-APPLE-WEBAUTH-PCS-Mail`）。
 
 ## API
 
@@ -86,13 +88,16 @@ docker compose up -d --build
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
 | GET | `/health` | 健康檢查 |
-| GET | `/v1/session/status` | 目前 Session 狀態 |
+| GET | `/v1/session/status` | 目前 Session 狀態（含 `region`） |
 | POST | `/v1/session/refresh` | 用現有 Session 做一次低風險檢查 |
-| POST | `/v1/session/import` | 匯入 Session（body：`{"curl_text": "...", "icloud_region": "international"}`；亦可使用 `china`） |
+| POST | `/v1/session/import` | 匯入 Session（body：`{"curl_text": "..."}`；支援 icloud.com / icloud.com.cn） |
 | GET | `/v1/aliases` | 列出信箱 |
 | POST | `/v1/aliases` | 建立信箱（body：`{"label": "...", "note": "..."}`） |
 | POST | `/v1/aliases/{id}/disable` · `/enable` · `/delete` | 停用 / 啟用 / 刪除 |
 | GET | `/v1/aliases/export.csv` | 匯出 CSV |
+| GET | `/v1/mail/folders` | 郵件資料夾清單 |
+| GET | `/v1/mail/messages?folder=&limit=&offset=` | 郵件清單（`folder` 省略時自動用收件匣） |
+| GET | `/v1/mail/messages/{guid}` | 讀取單封郵件（text/html/附件中繼資料） |
 | GET · POST | `/v1/auto-refresh` | 讀取或更新自動刷新設定 |
 | POST | `/v1/auto-refresh/run` | 立即執行一次刷新 |
 
@@ -101,6 +106,12 @@ docker compose up -d --build
 ```json
 { "ok": true, "data": {}, "error": null, "meta": { "service": "hme-manager", "version": "1", "requestId": null } }
 ```
+
+## 收件匣讀信
+
+「收件匣」分頁會用同一份 Session 讀取 iCloud 網頁郵件（JSON-RPC over `pNN-mailws.icloud.com`）。郵件服務的分區（`pNN`）與 HME 分區不一定相同，因此會先向 iCloud `setup` 服務查詢正確的郵件主機，查詢失敗才退回推導值。開啟一封郵件時會自動掃描主旨／內文，偵測到 4–8 位數的驗證碼即可一鍵複製；HTML 內文會放在 `sandbox` 的 iframe 中顯示，避免遠端內容存取工作台。
+
+若收件匣回報 `SESSION_MISSING` 或郵件授權不足，請在 iCloud 網頁先開啟一次「郵件」再重新匯入 Session（cookie 需包含郵件授權）。
 
 範例：
 

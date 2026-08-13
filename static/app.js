@@ -33,20 +33,13 @@ const sessionStateEl = $("sessionState");
 const autoRefreshEnabledEl = $("autoRefreshEnabled");
 const autoRefreshIntervalEl = $("autoRefreshInterval");
 const autoRefreshStatusEl = $("autoRefreshStatus");
-const icloudPortalLinkEl = $("icloudPortalLink");
-const icloudRegionHintEl = $("icloudRegionHint");
+const sessionRegionEl = $("sessionRegion");
+const mailFolderSelect = $("mailFolderSelect");
+const mailListEl = $("mailList");
+const mailReaderEl = $("mailReader");
+const toastsEl = $("toasts");
 
-const VIEW_TITLES = { aliases: "信箱清單", builder: "API Builder", session: "Session & 自動刷新" };
-const ICLOUD_REGIONS = {
-  international: {
-    portalUrl: "https://www.icloud.com/icloudplus/",
-    hint: "使用 icloud.com 服務域名。"
-  },
-  china: {
-    portalUrl: "https://www.icloud.com.cn/icloudplus/",
-    hint: "使用 icloud.com.cn 服務域名。匯入時會自動在 iCloud 域名後加上 .cn。"
-  }
-};
+const VIEW_TITLES = { aliases: "信箱清單", inbox: "收件匣", builder: "API Builder", session: "Session & 自動刷新" };
 
 let aliasRows = [];
 let lastSessionStatus = null;
@@ -56,6 +49,10 @@ let lastAutoRefresh = null;
 let autoRefreshCountdownTimer = null;
 let currentOperation = "list";
 let currentView = "aliases";
+let mailFolders = [];
+let mailMessages = [];
+let currentMailGuid = null;
+let inboxLoadedOnce = false;
 
 const operations = {
   status: { method: "GET", path: "/v1/session/status", body: null },
@@ -64,7 +61,10 @@ const operations = {
   create: { method: "POST", path: "/v1/aliases", body: { label: "GPT", note: "" } },
   disable: { method: "POST", path: "/v1/aliases/{anonymousId}/disable", body: null },
   enable: { method: "POST", path: "/v1/aliases/{anonymousId}/enable", body: null },
-  delete: { method: "POST", path: "/v1/aliases/{anonymousId}/delete", body: null }
+  delete: { method: "POST", path: "/v1/aliases/{anonymousId}/delete", body: null },
+  mailFolders: { method: "GET", path: "/v1/mail/folders", body: null },
+  mailMessages: { method: "GET", path: "/v1/mail/messages?limit=20&offset=0", body: null },
+  mailMessage: { method: "GET", path: "/v1/mail/messages/{guid}", body: null }
 };
 
 const META = { service: "hme-manager", version: "1", requestId: null };
@@ -75,7 +75,10 @@ const responseExamples = {
   create: { ok: true, data: { origin: "ON_DEMAND", anonymousId: "newalias123", domain: "", hme: "new.alias@icloud.com", label: "GPT", note: "", createTimestamp: 1778246060430, isActive: true, recipientMailId: "" }, error: null, meta: META },
   disable: { ok: true, data: { anonymousId: "example123", isActive: false }, error: null, meta: META },
   enable: { ok: true, data: { anonymousId: "example123", isActive: true }, error: null, meta: META },
-  delete: { ok: true, data: { anonymousId: "example123", deleted: true }, error: null, meta: META }
+  delete: { ok: true, data: { anonymousId: "example123", deleted: true }, error: null, meta: META },
+  mailFolders: { ok: true, data: [{ guid: "folder-guid-1", name: "Inbox", role: "INBOX", unreadCount: 2, totalCount: 48 }], error: null, meta: META },
+  mailMessages: { ok: true, data: { folder: "folder-guid-1", offset: 0, total: 48, messages: [{ guid: "message-guid-1", from: "OpenAI <noreply@openai.com>", to: "example.alias@icloud.com", subject: "Your verification code", date: "2026-08-13T02:00:00+00:00", snippet: "Your code is 123456", isRead: false }] }, error: null, meta: META },
+  mailMessage: { ok: true, data: { guid: "message-guid-1", from: "OpenAI <noreply@openai.com>", to: "example.alias@icloud.com", subject: "Your verification code", date: "2026-08-13T02:00:00+00:00", snippet: "", isRead: true, textBody: "Your code is 123456", htmlBody: "", attachments: [] }, error: null, meta: META }
 };
 
 // ---------- API key ----------
@@ -93,8 +96,53 @@ function apiHeaders() {
 function setStatus(text) {
   statusEl.textContent = text;
 }
+
+// ---------- toasts & clipboard ----------
+function toast(message, kind = "info") {
+  setStatus(message);
+  if (!toastsEl) return;
+  const item = document.createElement("div");
+  item.className = `toast ${kind}`;
+  item.textContent = message;
+  toastsEl.appendChild(item);
+  while (toastsEl.children.length > 4) toastsEl.removeChild(toastsEl.firstChild);
+  window.setTimeout(() => {
+    item.classList.add("leaving");
+    window.setTimeout(() => item.remove(), 240);
+  }, 3200);
+}
+
+async function copyText(text, label = "已複製") {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const scratch = document.createElement("textarea");
+      scratch.value = text;
+      scratch.style.position = "fixed";
+      scratch.style.opacity = "0";
+      document.body.appendChild(scratch);
+      scratch.select();
+      document.execCommand("copy");
+      scratch.remove();
+    }
+    toast(`${label}：${text.length > 42 ? text.slice(0, 42) + "…" : text}`, "ok");
+    return true;
+  } catch (error) {
+    toast("複製失敗，請手動選取", "bad");
+    return false;
+  }
+}
+
 function show(data, isError = false) {
   setStatus(isError ? "發生錯誤" : "完成", isError);
+  if (isError) {
+    const message = data && data.error && (data.error.message || data.error.code)
+      ? (data.error.message || data.error.code)
+      : "發生錯誤";
+    toast(String(message).slice(0, 160), "bad");
+  }
   showActualOutput(data);
 }
 function showActualOutput(data) {
@@ -134,6 +182,7 @@ function showView(name) {
   window.location.hash = currentView;
   if (currentView === "aliases") { renderAliases(); refreshAliasTable(); }
   if (currentView === "session") { loadStatus(); loadAutoRefresh(); }
+  if (currentView === "inbox" && !inboxLoadedOnce) { inboxLoadedOnce = true; initInbox(); }
 }
 
 // ---------- session info ----------
@@ -148,6 +197,15 @@ function inferForwardTo(status) {
   if (status && status.hme && status.hme.selectedForwardTo) return status.hme.selectedForwardTo;
   const firstAlias = aliasRows.find((alias) => alias.forwardToEmail);
   return firstAlias ? firstAlias.forwardToEmail : "未知";
+}
+
+function regionLabel(status) {
+  const region = status && status.region
+    ? status.region
+    : (status && status.metadata && status.metadata.host && status.metadata.host.endsWith(".icloud.com.cn") ? "china" : null);
+  if (region === "china") return "中國大陸（icloud.com.cn）";
+  if (region === "global") return "全球（icloud.com）";
+  return status && status.metadata && status.metadata.host ? "全球（icloud.com）" : "未知";
 }
 
 function renderSessionInfo(status = lastSessionStatus) {
@@ -165,6 +223,7 @@ function renderSessionInfo(status = lastSessionStatus) {
     sessionRequiredEl.textContent = `metadata ${yesNo(hasMetadata)} / session ${yesNo(hasSession)} / API key ${yesNo(hasApiKey)}`;
     sessionDsidEl.textContent = metadata.dsid || "未知";
     sessionHostEl.textContent = metadata.host || "未知";
+    if (sessionRegionEl) sessionRegionEl.textContent = regionLabel(s);
     sessionSavedAtEl.textContent = formatSessionTime(s.lastSavedAt || s.configUpdatedAt);
     sessionSyncedAtEl.textContent = lastAliasSyncAt ? `${formatSessionTime(lastAliasSyncAt)} / ${aliasCount} 筆` : `尚未同步 / ${aliasCount} 筆`;
   }
@@ -265,7 +324,7 @@ async function loadAutoRefresh() {
 async function saveAutoRefreshSettings() {
   const payload = { enabled: autoRefreshEnabledEl.checked, intervalSeconds: Number(autoRefreshIntervalEl.value || 600) };
   const data = await request("/v1/auto-refresh", { method: "POST", headers: apiHeaders(), body: JSON.stringify(payload) });
-  if (data && data.data) { renderAutoRefresh(data.data); setStatus("自動刷新設定已保存"); }
+  if (data && data.data) { renderAutoRefresh(data.data); toast("自動刷新設定已保存", "ok"); }
   return data;
 }
 async function runAutoRefreshNow() {
@@ -273,7 +332,7 @@ async function runAutoRefreshNow() {
   if (data && data.data && data.data.autoRefresh) {
     renderAutoRefresh(data.data.autoRefresh);
     if (data.data.session) { renderSessionInfo(data.data.session); }
-    if (data.data.session && data.data.session.sessionValid) { await refreshAliasTable(); setStatus("手動刷新成功，清單已同步"); }
+    if (data.data.session && data.data.session.sessionValid) { await refreshAliasTable(); toast("手動刷新成功，清單已同步", "ok"); }
   }
   return data;
 }
@@ -314,13 +373,13 @@ function readRequestJson(validate = false) {
   try {
     const data = JSON.parse(requestPreviewEl.value || "{}");
     if (validate && (!data.method || !data.path)) throw new Error("method and path are required");
-    if (validate && String(data.path).includes("{anonymousId}")) {
-      show({ ok: false, data: null, error: { code: "MISSING_ANONYMOUS_ID", message: "請先把 path 的 {anonymousId} 換成真實 anonymousId。" }, meta: META }, true);
-      throw new Error("MISSING_ANONYMOUS_ID");
+    if (validate && (String(data.path).includes("{anonymousId}") || String(data.path).includes("{guid}"))) {
+      show({ ok: false, data: null, error: { code: "MISSING_PATH_PARAM", message: "請先把 path 的 {anonymousId} / {guid} 換成真實 ID。" }, meta: META }, true);
+      throw new Error("MISSING_PATH_PARAM");
     }
     return data;
   } catch (error) {
-    if (validate && String(error.message || error) === "MISSING_ANONYMOUS_ID") throw error;
+    if (validate && String(error.message || error) === "MISSING_PATH_PARAM") throw error;
     if (validate) {
       show({ ok: false, data: null, error: { code: "INVALID_REQUEST_JSON", message: `API Request JSON 格式錯誤：${String(error.message || error)}` }, meta: META }, true);
       throw error;
@@ -353,8 +412,8 @@ async function runSelectedOperation(operationName = null) {
   if (data && data.data && activeOperation === "refresh") {
     lastSessionRefreshAt = data.data.lastRefreshAt || new Date();
     renderSessionInfo(data.data);
-    if (data.data.needsReauth) { setStatus("Session 需要重新匯入", true); return data; }
-    if (data.data.sessionValid) { await refreshAliasTable(); setStatus("Session 已刷新，清單已同步"); }
+    if (data.data.needsReauth) { toast("Session 需要重新匯入", "bad"); return data; }
+    if (data.data.sessionValid) { await refreshAliasTable(); toast("Session 已刷新，清單已同步", "ok"); }
   }
   if (data && data.data && ["create", "disable", "enable", "delete"].includes(activeOperation)) await refreshAliasTable();
   return data;
@@ -391,11 +450,17 @@ function renderAliases() {
     const active = alias.isActive;
     const toggleAction = active ? "disable" : "enable";
     const toggleLabel = active ? "停用" : "啟用";
+    const created = alias.createTimestamp ? new Date(Number(alias.createTimestamp)).toLocaleString() : "";
     return `<tr>
-      <td class="mono">${escapeHtml(alias.hme || "")}</td>
+      <td class="mono hme-cell">
+        <button type="button" class="copy-btn" data-action="copy-alias" data-index="${index}" title="複製信箱地址" aria-label="複製信箱地址">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button><span>${escapeHtml(alias.hme || "")}</span>
+      </td>
       <td>${escapeHtml(alias.label || "")}</td>
       <td>${escapeHtml(alias.note || "")}</td>
       <td class="mono">${escapeHtml(alias.forwardToEmail || "")}</td>
+      <td class="mono created-cell">${escapeHtml(created)}</td>
       <td><span class="badge ${active ? "on" : "off"}">${active ? "active" : "inactive"}</span></td>
       <td class="row-actions">
         <button type="button" data-action="toggle-alias" data-index="${index}" data-alias-action="${toggleAction}">${toggleLabel}</button>
@@ -403,7 +468,7 @@ function renderAliases() {
       </td></tr>`;
   }).join("");
   tableEl.innerHTML = `<table>
-      <thead><tr><th>hme</th><th>label</th><th>note</th><th>forwardTo</th><th>status</th><th>操作</th></tr></thead>
+      <thead><tr><th>hme</th><th>label</th><th>note</th><th>forwardTo</th><th>建立時間</th><th>status</th><th>操作</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
 }
 async function refreshAliasTable() {
@@ -430,16 +495,214 @@ async function runAliasAction(alias, action) {
 async function submitCreateAlias(event) {
   event.preventDefault();
   const label = ($("createLabel").value || "").trim();
-  if (!label) { setStatus("label 為必填", true); return; }
+  if (!label) { toast("label 為必填", "bad"); return; }
   const note = $("createNote").value || "";
-  const data = await request("/v1/aliases", { method: "POST", headers: apiHeaders(), body: JSON.stringify({ label, note }) });
-  if (data && data.data) {
-    $("createLabel").value = "";
-    $("createNote").value = "";
-    createAliasForm.hidden = true;
-    setStatus(`已建立 ${data.data.hme || label}`);
-    await refreshAliasTable();
+  const submitBtn = $("createSubmitBtn");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "建立中…";
+  try {
+    const data = await request("/v1/aliases", { method: "POST", headers: apiHeaders(), body: JSON.stringify({ label, note }) });
+    if (data && data.data) {
+      $("createLabel").value = "";
+      $("createNote").value = "";
+      createAliasForm.hidden = true;
+      toast(`已建立 ${data.data.hme || label}，已複製到剪貼簿`, "ok");
+      if (data.data.hme) copyText(data.data.hme, "已複製新信箱");
+      await refreshAliasTable();
+    }
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "建立";
   }
+}
+
+async function exportAliasesCsv() {
+  try {
+    const response = await fetch("/v1/aliases/export.csv", { headers: apiHeaders() });
+    if (response.status === 401) { showModal(); return; }
+    const data = await response.json();
+    if (!response.ok || data.ok === false || typeof data.data !== "string") {
+      show(data, true);
+      return;
+    }
+    const blob = new Blob(["\ufeff" + data.data], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `hme-aliases-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    toast("CSV 已匯出", "ok");
+  } catch (error) {
+    toast(`匯出失敗：${String(error)}`, "bad");
+  }
+}
+
+// ---------- inbox ----------
+function formatMailTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  return sameDay
+    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleDateString([], { month: "numeric", day: "numeric" }) + " " + date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function extractVerificationCode(message) {
+  const haystacks = [message.subject || "", message.snippet || "", message.textBody || "", (message.htmlBody || "").replace(/<[^>]+>/g, " ")];
+  const labelled = /(?:code|verification|one[- ]?time|otp|pin|驗證碼|验证码|校驗碼|校验码|動態密碼|动态密码)\D{0,20}?(\d{4,8})/i;
+  for (const text of haystacks) {
+    const match = text.match(labelled);
+    if (match) return match[1];
+  }
+  for (const text of haystacks) {
+    const match = text.match(/(?:^|\s)(\d{6})(?:\s|$|[.,!])/);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+function renderMailFolders() {
+  if (!mailFolderSelect) return;
+  if (!mailFolders.length) {
+    mailFolderSelect.innerHTML = '<option value="">找不到資料夾</option>';
+    return;
+  }
+  mailFolderSelect.innerHTML = mailFolders.map((folder) => {
+    const unread = folder.unreadCount ? `（${folder.unreadCount} 未讀）` : "";
+    return `<option value="${escapeHtml(folder.guid)}">${escapeHtml(folder.name)}${unread}</option>`;
+  }).join("");
+  const inbox = mailFolders.find((folder) => String(folder.role || "").toUpperCase() === "INBOX")
+    || mailFolders.find((folder) => /inbox|收件/i.test(folder.name || ""))
+    || mailFolders[0];
+  mailFolderSelect.value = inbox.guid;
+}
+
+function renderMailList() {
+  if (!mailListEl) return;
+  if (!mailMessages.length) {
+    mailListEl.innerHTML = '<div class="empty-state">此資料夾沒有郵件。</div>';
+    return;
+  }
+  mailListEl.innerHTML = mailMessages.map((message, index) => `
+    <button type="button" class="mail-item${message.guid === currentMailGuid ? " active" : ""}${message.isRead === false ? " unread" : ""}" data-mail-index="${index}">
+      <span class="mail-item-top"><span class="mail-from">${escapeHtml(message.from || "(未知寄件人)")}</span><span class="mail-date">${escapeHtml(formatMailTime(message.date))}</span></span>
+      <span class="mail-subject">${escapeHtml(message.subject || "(無主旨)")}</span>
+      ${message.snippet ? `<span class="mail-snippet">${escapeHtml(message.snippet)}</span>` : ""}
+    </button>`).join("");
+}
+
+function renderMailReader(message) {
+  if (!mailReaderEl) return;
+  if (!message) {
+    mailReaderEl.innerHTML = '<div class="empty-state">從左側選擇一封郵件即可閱讀內容；偵測到驗證碼時可一鍵複製。</div>';
+    return;
+  }
+  const code = extractVerificationCode(message);
+  const attachments = Array.isArray(message.attachments) && message.attachments.length
+    ? `<div class="mail-attachments">附件：${message.attachments.map((a) => escapeHtml(a.filename || "(未命名)")).join("、")}</div>`
+    : "";
+  let bodyHtml;
+  if (message.htmlBody) {
+    bodyHtml = `<iframe class="mail-html" sandbox="" referrerpolicy="no-referrer" title="郵件內容"></iframe>`;
+  } else if (message.textBody) {
+    bodyHtml = `<pre class="mail-text">${escapeHtml(message.textBody)}</pre>`;
+  } else {
+    bodyHtml = '<div class="empty-state">（此郵件沒有可顯示的內容）</div>';
+  }
+  mailReaderEl.innerHTML = `
+    <div class="mail-head">
+      <div class="mail-head-subject">${escapeHtml(message.subject || "(無主旨)")}</div>
+      <dl class="mail-meta">
+        <dt>寄件人</dt><dd>${escapeHtml(message.from || "未知")}</dd>
+        <dt>收件人</dt><dd class="mono">${escapeHtml(message.to || "未知")}</dd>
+        <dt>時間</dt><dd>${escapeHtml(message.date ? new Date(message.date).toLocaleString() : "未知")}</dd>
+      </dl>
+      ${code ? `<button type="button" class="code-chip" data-code="${escapeHtml(code)}" title="點擊複製驗證碼">驗證碼 <strong>${escapeHtml(code)}</strong>（點擊複製）</button>` : ""}
+      ${attachments}
+    </div>
+    ${bodyHtml}`;
+  const frame = mailReaderEl.querySelector("iframe.mail-html");
+  if (frame && message.htmlBody) frame.srcdoc = message.htmlBody;
+  const chip = mailReaderEl.querySelector(".code-chip");
+  if (chip) chip.addEventListener("click", () => copyText(chip.dataset.code, "已複製驗證碼"));
+}
+
+async function loadMailFolders() {
+  try {
+    const response = await fetch("/v1/mail/folders", { headers: apiHeaders() });
+    if (response.status === 401) { showModal(); return false; }
+    const data = await response.json();
+    if (!response.ok || data.ok === false || !Array.isArray(data.data)) {
+      renderMailError(data);
+      return false;
+    }
+    mailFolders = data.data;
+    renderMailFolders();
+    return true;
+  } catch (error) {
+    renderMailError({ error: { message: String(error) } });
+    return false;
+  }
+}
+
+async function loadMailMessages() {
+  const folder = mailFolderSelect ? mailFolderSelect.value : "";
+  if (!folder) return;
+  mailListEl.innerHTML = '<div class="empty-state">載入郵件中…</div>';
+  try {
+    const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(folder)}&limit=30`, { headers: apiHeaders() });
+    if (response.status === 401) { showModal(); return; }
+    const data = await response.json();
+    if (!response.ok || data.ok === false || !data.data) {
+      renderMailError(data);
+      return;
+    }
+    mailMessages = Array.isArray(data.data.messages) ? data.data.messages : [];
+    currentMailGuid = null;
+    renderMailList();
+    renderMailReader(null);
+  } catch (error) {
+    renderMailError({ error: { message: String(error) } });
+  }
+}
+
+async function openMailMessage(index) {
+  const summary = mailMessages[index];
+  if (!summary || !summary.guid) return;
+  currentMailGuid = summary.guid;
+  renderMailList();
+  mailReaderEl.innerHTML = '<div class="empty-state">讀取郵件中…</div>';
+  try {
+    const response = await fetch(`/v1/mail/messages/${encodeURIComponent(summary.guid)}`, { headers: apiHeaders() });
+    if (response.status === 401) { showModal(); return; }
+    const data = await response.json();
+    if (!response.ok || data.ok === false || !data.data) {
+      renderMailReader({ ...summary, textBody: "", htmlBody: "" });
+      toast(data && data.error && data.error.message ? data.error.message : "讀取郵件失敗，僅顯示摘要", "warn");
+      return;
+    }
+    renderMailReader({ ...summary, ...data.data });
+  } catch (error) {
+    toast(`讀取郵件失敗：${String(error)}`, "bad");
+  }
+}
+
+function renderMailError(data) {
+  const message = data && data.error && (data.error.message || data.error.code) ? (data.error.message || data.error.code) : "載入失敗";
+  const hint = /SESSION_MISSING|尚未匯入/.test(String(message))
+    ? "請先在「Session & 自動刷新」匯入 Session。"
+    : "若持續失敗，請在 iCloud 網頁開啟過「郵件」後重新匯入 Session（需要郵件授權 cookie）。";
+  mailListEl.innerHTML = `<div class="empty-state">${escapeHtml(String(message))}<br><small>${escapeHtml(hint)}</small></div>`;
+}
+
+async function initInbox() {
+  if (!mailFolderSelect) return;
+  const loaded = await loadMailFolders();
+  if (loaded) await loadMailMessages();
 }
 
 // ---------- session actions ----------
@@ -452,20 +715,8 @@ async function loadStatus() {
   } catch (error) { /* keep prior status */ }
 }
 
-function selectedICloudRegion() {
-  const selected = document.querySelector('input[name="icloudRegion"]:checked');
-  return selected && ICLOUD_REGIONS[selected.value] ? selected.value : "international";
-}
-
-function updateICloudRegionUi() {
-  const region = ICLOUD_REGIONS[selectedICloudRegion()];
-  icloudPortalLinkEl.href = region.portalUrl;
-  icloudRegionHintEl.textContent = region.hint;
-}
-
 async function submitImportSession() {
   const curlText = ($("importCurl").value || "").trim();
-  const icloudRegion = selectedICloudRegion();
   const resultEl = $("importResult");
   resultEl.hidden = false;
   if (!curlText) { resultEl.textContent = "請先貼上 list?clientBuildNumber 請求的 Copy as cURL (bash) 或 HAR JSON。"; return; }
@@ -473,12 +724,14 @@ async function submitImportSession() {
   const data = await request("/v1/session/import", {
     method: "POST",
     headers: apiHeaders(),
-    body: JSON.stringify({ curl_text: curlText, icloud_region: icloudRegion })
+    body: JSON.stringify({ curl_text: curlText })
   });
   if (!data) { resultEl.textContent = "匯入失敗，請確認貼上的內容包含 cookie。"; return; }
   resultEl.textContent = JSON.stringify(data.data, null, 2);
   $("importCurl").value = "";
-  setStatus("Session 已匯入，正在刷新與同步…");
+  const importedRegion = data.data && data.data.region === "china" ? "中國大陸（icloud.com.cn）" : "全球（icloud.com）";
+  toast(`Session 已匯入（${importedRegion}），正在刷新與同步…`, "ok");
+  inboxLoadedOnce = false; // next visit to inbox reloads with the new session
   await runSelectedOperation("refresh");
   await loadStatus();
   await refreshAliasTable();
@@ -514,6 +767,13 @@ $("logoutBtn").addEventListener("click", () => { localStorage.removeItem(STORAGE
 
 aliasFilterInput.addEventListener("input", renderAliases);
 $("refreshListBtn").addEventListener("click", refreshAliasTable);
+$("exportCsvBtn").addEventListener("click", exportAliasesCsv);
+$("refreshMailBtn").addEventListener("click", async () => { await loadMailFolders(); await loadMailMessages(); });
+mailFolderSelect.addEventListener("change", loadMailMessages);
+mailListEl.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-mail-index]");
+  if (item) openMailMessage(Number(item.dataset.mailIndex));
+});
 $("createAliasBtn").addEventListener("click", () => {
   createAliasForm.hidden = !createAliasForm.hidden;
   if (!createAliasForm.hidden) $("createLabel").focus();
@@ -533,16 +793,25 @@ aliasTabs.addEventListener("click", (event) => {
   aliasSourceEl.hidden = !source;
 });
 tableEl.addEventListener("click", async (event) => {
+  const copyButton = event.target.closest('[data-action="copy-alias"]');
   const toggleButton = event.target.closest('[data-action="toggle-alias"]');
   const deleteButton = event.target.closest('[data-action="delete-alias"]');
-  const button = toggleButton || deleteButton;
+  const button = copyButton || toggleButton || deleteButton;
   if (!button) return;
   const alias = filterAliases(aliasRows)[Number(button.dataset.index)];
-  if (!alias || !alias.anonymousId) return;
-  if (toggleButton) { await runAliasAction(alias, toggleButton.dataset.aliasAction || "disable"); return; }
+  if (!alias) return;
+  if (copyButton) { await copyText(alias.hme || "", "已複製信箱"); return; }
+  if (!alias.anonymousId) return;
+  if (toggleButton) {
+    const action = toggleButton.dataset.aliasAction || "disable";
+    const data = await runAliasAction(alias, action);
+    if (data && data.ok !== false) toast(`${action === "disable" ? "已停用" : "已啟用"} ${alias.hme || alias.anonymousId}`, "ok");
+    return;
+  }
   if (!window.confirm(`確定要停用並刪除 ${alias.hme || alias.anonymousId}？此操作不可復原。`)) return;
   if (alias.isActive) await runAliasAction(alias, "disable");
-  await runAliasAction(alias, "delete");
+  const data = await runAliasAction(alias, "delete");
+  if (data && data.ok !== false) toast(`已刪除 ${alias.hme || alias.anonymousId}`, "ok");
 });
 
 endpointList.addEventListener("click", (event) => {
@@ -556,10 +825,6 @@ $("refreshSessionBtn").addEventListener("click", () => runSelectedOperation("ref
 $("saveAutoRefreshBtn").addEventListener("click", saveAutoRefreshSettings);
 $("runAutoRefreshBtn").addEventListener("click", runAutoRefreshNow);
 $("importSubmitBtn").addEventListener("click", submitImportSession);
-document.querySelectorAll('input[name="icloudRegion"]').forEach((input) => {
-  input.addEventListener("change", updateICloudRegionUi);
-});
-updateICloudRegionUi();
 
 // ---------- theme toggle ----------
 const THEME_KEY = "hme-theme";

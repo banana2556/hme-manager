@@ -1,7 +1,4 @@
-import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from api_service import (
     create_alias,
@@ -10,8 +7,11 @@ from api_service import (
     enable_alias,
     error_response,
     export_aliases_csv,
+    get_mail_message,
     import_session,
     list_aliases,
+    list_mail_folders,
+    list_mail_messages,
     ok_response,
     refresh_session,
     require_api_key,
@@ -54,6 +54,7 @@ class FakeManager:
         self.config_path = "hme-config.json"
         self.metadata_path = "state/hme-session.json"
         self.state_dir = "state"
+        self.reloaded = False
 
     def status(self):
         return {"metadataDetected": True}
@@ -61,8 +62,26 @@ class FakeManager:
     def check(self):
         return {"sessionValid": True}
 
-    def _load_metadata(self):
-        return None
+    def reload(self):
+        self.reloaded = True
+
+
+class FakeMailClient:
+    def __init__(self):
+        self.list_calls = []
+
+    def list_folders(self):
+        return [{"guid": "f-inbox", "name": "Inbox", "role": "INBOX"}]
+
+    def inbox_folder(self):
+        return self.list_folders()[0]
+
+    def list_messages(self, folder_guid, limit=20, offset=0):
+        self.list_calls.append({"folder": folder_guid, "limit": limit, "offset": offset})
+        return {"folder": folder_guid, "offset": offset, "total": 0, "messages": []}
+
+    def get_message(self, guid):
+        return {"guid": guid, "subject": "hello"}
 
 
 class ApiServiceTests(unittest.TestCase):
@@ -151,34 +170,45 @@ class ApiServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "curl_text"):
             import_session(FakeManager(), {"curl_text": ""})
 
-    def test_import_session_applies_china_region(self):
-        curl_text = (
-            "curl 'https://p119-maildomainws.icloud.com/v2/hme/list?"
-            "clientBuildNumber=2614Build17&clientMasteringNumber=2614Build17&"
-            "clientId=client-1&dsid=608658063' "
-            "-b 'X-APPLE-WEBAUTH-USER=user; X-APPLE-WEBAUTH-TOKEN=token; "
-            "X-APPLE-DS-WEB-SESSION-TOKEN=session'"
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            manager = FakeManager()
-            manager.config_path = Path(tmp) / "hme-config.json"
-            manager.metadata_path = Path(tmp) / "state" / "hme-session.json"
-
-            response = import_session(
-                manager,
-                {"curl_text": curl_text, "icloud_region": "china"},
-            )
-            saved = json.loads(manager.config_path.read_text(encoding="utf-8"))
-
-        self.assertEqual(response["data"]["icloudRegion"], "china")
-        self.assertEqual(response["data"]["host"], "p119-maildomainws.icloud.com.cn")
-        self.assertEqual(saved["host"], "p119-maildomainws.icloud.com.cn")
-        self.assertEqual(saved["origin"], "https://www.icloud.com.cn")
-
     def test_export_aliases_csv_returns_csv_string(self):
         result = export_aliases_csv(FakeClient())
         self.assertIn("hme", result)
         self.assertIn("a@icloud.com", result)
+
+    def test_list_mail_folders_wraps_client_folders(self):
+        response = list_mail_folders(FakeMailClient())
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["data"][0]["guid"], "f-inbox")
+
+    def test_list_mail_messages_defaults_to_inbox(self):
+        client = FakeMailClient()
+
+        response = list_mail_messages(client, {})
+
+        self.assertEqual(response["data"]["folder"], "f-inbox")
+        self.assertEqual(client.list_calls[0], {"folder": "f-inbox", "limit": 20, "offset": 0})
+
+    def test_list_mail_messages_clamps_limit_and_offset(self):
+        client = FakeMailClient()
+
+        list_mail_messages(client, {"folder": "f-x", "limit": "999", "offset": "-3"})
+
+        self.assertEqual(client.list_calls[0], {"folder": "f-x", "limit": 100, "offset": 0})
+
+    def test_list_mail_messages_rejects_non_integer_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit"):
+            list_mail_messages(FakeMailClient(), {"limit": "abc"})
+
+    def test_get_mail_message_requires_guid(self):
+        with self.assertRaisesRegex(ValueError, "guid"):
+            get_mail_message(FakeMailClient(), "  ")
+
+    def test_get_mail_message_returns_detail(self):
+        response = get_mail_message(FakeMailClient(), "m-1")
+
+        self.assertEqual(response["data"]["subject"], "hello")
+
 
 if __name__ == "__main__":
     unittest.main()

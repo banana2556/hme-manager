@@ -1,9 +1,10 @@
 import unittest
 import tempfile
 from http import HTTPStatus
-from http.server import HTTPServer
+from http.server import HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
+import auto_refresh
 from web_app import (
     _hme_error_code_and_status,
     create_manager_from_env,
@@ -31,8 +32,11 @@ class FakeManager:
     def get_client(self):
         return FakeClient()
 
-    def _load_metadata(self):
-        return None
+    def get_mail_client(self):
+        return FakeMailClient()
+
+    def reload(self):
+        self.metadata = None
 
 
 class FakeClient:
@@ -50,6 +54,25 @@ class FakeClient:
 
     def delete_alias(self, anonymous_id):
         return {"anonymousId": anonymous_id, "deleted": True}
+
+
+class FakeMailClient:
+    def list_folders(self):
+        return [{"guid": "folder-1", "name": "Inbox", "role": "INBOX", "unreadCount": 1, "totalCount": 3}]
+
+    def inbox_folder(self):
+        return self.list_folders()[0]
+
+    def list_messages(self, folder_guid, limit=20, offset=0):
+        return {
+            "folder": folder_guid,
+            "offset": offset,
+            "total": 1,
+            "messages": [{"guid": "msg 1", "from": "a@b.c", "subject": "hi", "limit": limit}],
+        }
+
+    def get_message(self, guid):
+        return {"guid": guid, "subject": "hi", "textBody": "code 123456"}
 
 
 class WebAppTests(unittest.TestCase):
@@ -88,12 +111,13 @@ class WebAppTests(unittest.TestCase):
         # main logic stays external; only a tiny inline theme bootstrap is allowed
         self.assertLessEqual(html.count("<script"), 2)
 
-        # workbench shell: sidebar nav with three views
-        for view in ("aliases", "builder", "session"):
+        # workbench shell: sidebar nav with four views
+        for view in ("aliases", "inbox", "builder", "session"):
             self.assertIn(f'data-view="{view}"', html)
         # builder hooks
         self.assertIn("endpointList", html)
-        for endpoint in ("list", "create", "status", "refresh", "disable", "enable", "delete"):
+        for endpoint in ("list", "create", "status", "refresh", "disable", "enable", "delete",
+                         "mailFolders", "mailMessages", "mailMessage"):
             self.assertIn(f'data-endpoint="{endpoint}"', html)
         self.assertIn('id="requestPreview"', html)
         self.assertIn('id="responsePreview"', html)
@@ -104,22 +128,30 @@ class WebAppTests(unittest.TestCase):
         # aliases + session hooks
         self.assertIn('data-alias-tab="source"', html)
         self.assertIn("createAliasForm", html)
+        self.assertIn('id="exportCsvBtn"', html)
         self.assertIn("Mail / ForwardTo", html)
+        self.assertIn('id="sessionRegion"', html)
         self.assertIn("refreshSessionBtn", html)
         self.assertNotIn('id="loginBtn"', html)
+        # inbox view hooks
+        self.assertIn('id="view-inbox"', html)
+        self.assertIn('id="mailFolderSelect"', html)
+        self.assertIn('id="mailList"', html)
+        self.assertIn('id="mailReader"', html)
+        self.assertIn('id="refreshMailBtn"', html)
+        # toast container for visible operation feedback
+        self.assertIn('id="toasts"', html)
         # auto-refresh UI restored
         self.assertIn("autoRefreshEnabled", html)
         self.assertIn("autoRefreshInterval", html)
         self.assertIn('id="autoRefreshEnabled" type="checkbox" checked', html)
         self.assertIn('id="autoRefreshInterval" type="number" min="300" step="60" value="600"', html)
         self.assertIn("auto-refresh-actions", html)
-        # manual import UI present
+        # manual import UI present, covering both regions
         self.assertIn("importCurl", html)
         self.assertIn("手動匯入 Session", html)
         self.assertIn("https://www.icloud.com/icloudplus/", html)
-        self.assertIn('name="icloudRegion" value="international" checked', html)
-        self.assertIn('name="icloudRegion" value="china"', html)
-        self.assertIn("中國大陸版", html)
+        self.assertIn("https://www.icloud.com.cn/icloudplus/", html)
         self.assertIn("list?clientBuildNumber", html)
         self.assertIn("Copy as cURL (bash)", html)
         # api key modal
@@ -128,7 +160,7 @@ class WebAppTests(unittest.TestCase):
         # logo / favicon, theme toggle, author link
         self.assertIn('rel="icon"', html)
         self.assertIn("/static/logo.svg", html)
-        self.assertIn('<a class="brand-name" href="https://github.com/banana2556/icloud-mail-bot"', html)
+        self.assertIn('<a class="brand-name" href="https://github.com/banana2556/hme-manager"', html)
         self.assertIn('id="themeToggle"', html)
         self.assertLess(html.index('id="themeToggle"'), html.index('id="logoutBtn"'))
         self.assertIn('id="status" class="sr-only"', html)
@@ -151,21 +183,27 @@ class WebAppTests(unittest.TestCase):
         app_js = _read_static("app.js")
         for fn in ("renderSessionInfo", "syncCurlFromRequestEditor", "filterAliases",
                    "runSelectedOperation", "runAliasAction", "showView", "loadAutoRefresh",
-                   "submitImportSession"):
+                   "submitImportSession", "loadMailFolders", "loadMailMessages",
+                   "openMailMessage", "extractVerificationCode", "exportAliasesCsv",
+                   "toast", "copyText", "regionLabel"):
             self.assertIn(fn, app_js)
         self.assertIn('data-action="toggle-alias"', app_js)
         self.assertIn('data-action="delete-alias"', app_js)
+        self.assertIn('data-action="copy-alias"', app_js)
         self.assertNotIn("/v1/auth/", app_js)
         self.assertIn("/v1/auto-refresh", app_js)
         self.assertIn("/v1/session/import", app_js)
-        self.assertIn("icloud_region: icloudRegion", app_js)
-        self.assertIn("https://www.icloud.com.cn/icloudplus/", app_js)
+        self.assertIn("/v1/mail/folders", app_js)
+        self.assertIn("/v1/mail/messages", app_js)
+        self.assertIn("/v1/aliases/export.csv", app_js)
         self.assertIn("hme-api-key", app_js)
         self.assertIn("toggleTheme", app_js)
         self.assertIn("hme-theme", app_js)
         self.assertIn("setAutoRefreshMini", app_js)
         self.assertIn("sessionIndicatorEl.className = `session-indicator ${stateKind}`", app_js)
         self.assertNotIn("dev-secret", app_js)
+        # html mail bodies must be sandboxed
+        self.assertIn('sandbox=""', app_js)
 
     def test_render_index_contains_api_key_modal(self):
         html = render_index()
@@ -180,8 +218,11 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("#apiKeyModal", app_css)
         self.assertIn(".session-indicator.ok", app_css)
         self.assertIn(".alias-toolbar", app_css)
-        self.assertIn(".icloud-region-switch", app_css)
         self.assertIn(".logout-label { display: none; }", app_css)
+        self.assertIn(".toast", app_css)
+        self.assertIn(".inbox-grid", app_css)
+        self.assertIn(".mail-item", app_css)
+        self.assertIn(".code-chip", app_css)
 
     def _auto_refresh_manager(self, tmp):
         class M:
@@ -199,34 +240,28 @@ class WebAppTests(unittest.TestCase):
         return M(tmp)
 
     def test_auto_refresh_defaults_enabled_every_ten_minutes(self):
-        import web_app
-
-        defaults = web_app.auto_refresh_defaults()
+        defaults = auto_refresh.defaults()
         self.assertTrue(defaults["enabled"])
         self.assertEqual(defaults["intervalSeconds"], 600)
 
     def test_auto_refresh_config_roundtrip_and_min_interval(self):
-        import web_app
-
         with tempfile.TemporaryDirectory() as tmp:
             manager = self._auto_refresh_manager(tmp)
-            saved = web_app.save_auto_refresh_config({"enabled": True, "intervalSeconds": 60}, manager)
+            saved = auto_refresh.save_config({"enabled": True, "intervalSeconds": 60}, manager)
             self.assertTrue(saved["enabled"])
             self.assertEqual(saved["intervalSeconds"], 300)  # clamped to minimum
-            updated = web_app.update_auto_refresh({"intervalSeconds": 900}, manager)
+            updated = auto_refresh.update({"intervalSeconds": 900}, manager)
             self.assertEqual(updated["intervalSeconds"], 900)
 
     def test_run_auto_refresh_once_success_then_self_disable(self):
-        import web_app
-
         with tempfile.TemporaryDirectory() as tmp:
             manager = self._auto_refresh_manager(tmp)
-            web_app.update_auto_refresh({"enabled": True}, manager)
-            ok = web_app.run_auto_refresh_once(manager)
+            auto_refresh.update({"enabled": True}, manager)
+            ok = auto_refresh.run_once(manager)
             self.assertTrue(ok["autoRefresh"]["enabled"])
             self.assertIsNotNone(ok["autoRefresh"]["lastSuccessAt"])
             manager.reauth = True  # session now needs re-import
-            disabled = web_app.run_auto_refresh_once(manager)
+            disabled = auto_refresh.run_once(manager)
             self.assertFalse(disabled["autoRefresh"]["enabled"])
             self.assertTrue(disabled["autoRefresh"]["disabledReason"])
 
@@ -361,10 +396,80 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(payload["data"], {"anonymousId": "id1", "deleted": True})
 
-    def test_create_server_uses_http_server(self):
+    def test_dispatch_private_api_lists_mail_folders(self):
+        status, payload = dispatch_private_api(
+            "GET",
+            "/v1/mail/folders",
+            headers={"X-API-Key": "secret"},
+            body=b"",
+            manager=FakeManager(),
+            api_key="secret",
+        )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["data"][0]["name"], "Inbox")
+
+    def test_dispatch_private_api_lists_mail_messages_with_default_inbox(self):
+        status, payload = dispatch_private_api(
+            "GET",
+            "/v1/mail/messages",
+            headers={"X-API-Key": "secret"},
+            body=b"",
+            manager=FakeManager(),
+            api_key="secret",
+        )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["data"]["folder"], "folder-1")
+        self.assertEqual(payload["data"]["messages"][0]["guid"], "msg 1")
+
+    def test_dispatch_private_api_lists_mail_messages_with_query(self):
+        status, payload = dispatch_private_api(
+            "GET",
+            "/v1/mail/messages?folder=custom-guid&limit=5&offset=10",
+            headers={"X-API-Key": "secret"},
+            body=b"",
+            manager=FakeManager(),
+            api_key="secret",
+        )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["data"]["folder"], "custom-guid")
+        self.assertEqual(payload["data"]["offset"], 10)
+        self.assertEqual(payload["data"]["messages"][0]["limit"], 5)
+
+    def test_dispatch_private_api_rejects_bad_mail_limit(self):
+        status, payload = dispatch_private_api(
+            "GET",
+            "/v1/mail/messages?limit=abc",
+            headers={"X-API-Key": "secret"},
+            body=b"",
+            manager=FakeManager(),
+            api_key="secret",
+        )
+
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload["error"]["code"], "BAD_REQUEST")
+
+    def test_dispatch_private_api_gets_mail_message_with_encoded_guid(self):
+        status, payload = dispatch_private_api(
+            "GET",
+            "/v1/mail/messages/msg%201",
+            headers={"X-API-Key": "secret"},
+            body=b"",
+            manager=FakeManager(),
+            api_key="secret",
+        )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["data"]["guid"], "msg 1")
+
+    def test_create_server_uses_threading_http_server(self):
         server = create_server("127.0.0.1", 0)
         try:
             self.assertIsInstance(server, HTTPServer)
+            self.assertIsInstance(server, ThreadingHTTPServer)
+            self.assertTrue(server.daemon_threads)
         finally:
             server.server_close()
 

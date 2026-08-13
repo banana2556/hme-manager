@@ -1,16 +1,23 @@
+"""HTTP entry point: serves the workbench UI and the /v1 JSON API.
+
+Routing is declarative (see ROUTES): each entry maps method + path pattern to
+a handler taking (manager, body, query, params). Adding an endpoint means
+adding one line here plus a handler in api_service.py.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import threading
-import time
+import re
 from pathlib import Path
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Mapping
-from urllib.parse import urlparse
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from typing import Any, Callable, Mapping
+from urllib.parse import parse_qs, unquote, urlparse
 
+import auto_refresh
 from api_service import (
     create_alias,
     delete_alias,
@@ -18,8 +25,11 @@ from api_service import (
     enable_alias,
     error_response,
     export_aliases_csv,
+    get_mail_message,
     import_session,
     list_aliases,
+    list_mail_folders,
+    list_mail_messages,
     ok_response,
     refresh_session,
     require_api_key,
@@ -39,7 +49,6 @@ def create_manager_from_env(env: Mapping[str, str] | None = None) -> ICloudSessi
 
 MANAGER = create_manager_from_env()
 
-
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -51,162 +60,96 @@ def render_index() -> str:
     return _read_static("index.html")
 
 
-AUTO_REFRESH_DEFAULT_INTERVAL_SECONDS = 600
-AUTO_REFRESH_MIN_INTERVAL_SECONDS = 300
-AUTO_REFRESH_STOP = threading.Event()
-AUTO_REFRESH_THREAD: threading.Thread | None = None
-
-
-def auto_refresh_config_path(manager: ICloudSessionManager = MANAGER) -> Path:
-    return Path(manager.state_dir) / "auto-refresh.json"
-
-
-def auto_refresh_defaults() -> dict[str, Any]:
-    return {
-        "enabled": True,
-        "intervalSeconds": AUTO_REFRESH_DEFAULT_INTERVAL_SECONDS,
-        "lastRunAt": None,
-        "lastSuccessAt": None,
-        "lastDisabledAt": None,
-        "lastError": None,
-        "disabledReason": None,
-    }
-
-
-def _normalize_auto_refresh(config: dict[str, Any]) -> dict[str, Any]:
-    merged = {**auto_refresh_defaults(), **config}
-    try:
-        merged["intervalSeconds"] = max(
-            AUTO_REFRESH_MIN_INTERVAL_SECONDS,
-            int(merged.get("intervalSeconds") or AUTO_REFRESH_DEFAULT_INTERVAL_SECONDS),
-        )
-    except (TypeError, ValueError):
-        merged["intervalSeconds"] = AUTO_REFRESH_DEFAULT_INTERVAL_SECONDS
-    merged["enabled"] = bool(merged.get("enabled"))
-    return merged
-
-
-def load_auto_refresh_config(manager: ICloudSessionManager = MANAGER) -> dict[str, Any]:
-    path = auto_refresh_config_path(manager)
-    data: dict[str, Any] = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                data = loaded
-        except (OSError, json.JSONDecodeError):
-            data = {}
-    return _normalize_auto_refresh(data)
-
-
-def save_auto_refresh_config(config: dict[str, Any], manager: ICloudSessionManager = MANAGER) -> dict[str, Any]:
-    merged = _normalize_auto_refresh(config)
-    path = auto_refresh_config_path(manager)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return merged
-
-
-def auto_refresh_status(manager: ICloudSessionManager = MANAGER) -> dict[str, Any]:
-    config = load_auto_refresh_config(manager)
-    config["workerRunning"] = AUTO_REFRESH_THREAD is not None and AUTO_REFRESH_THREAD.is_alive()
-    now = time.time()
-    interval = config["intervalSeconds"]
-    last_run = float(config.get("lastRunAt") or config.get("lastSuccessAt") or 0)
-    if config.get("enabled"):
-        next_run_at = (last_run + interval) if last_run else now + interval
-        config["remainingSeconds"] = max(0, int(round(next_run_at - now)))
-        config["nextRunAt"] = next_run_at
-    else:
-        config["remainingSeconds"] = None
-        config["nextRunAt"] = None
-    config["serverNow"] = now
-    return config
-
-
-def update_auto_refresh(payload: Mapping[str, Any], manager: ICloudSessionManager = MANAGER) -> dict[str, Any]:
-    current = load_auto_refresh_config(manager)
-    if "enabled" in payload:
-        current["enabled"] = bool(payload.get("enabled"))
-        if current["enabled"]:
-            current["disabledReason"] = None
-            current["lastDisabledAt"] = None
-            current["lastError"] = None
-    if "intervalSeconds" in payload:
-        current["intervalSeconds"] = payload.get("intervalSeconds")
-    return save_auto_refresh_config(current, manager)
-
-
-def disable_auto_refresh(reason: str, manager: ICloudSessionManager = MANAGER) -> dict[str, Any]:
-    current = load_auto_refresh_config(manager)
-    current.update({"enabled": False, "lastDisabledAt": time.time(), "disabledReason": reason, "lastError": reason})
-    return save_auto_refresh_config(current, manager)
-
-
-def refresh_result_requires_disable(status: dict[str, Any]) -> str | None:
-    if not isinstance(status, dict):
-        return None
-    if status.get("needsReauth"):
-        return "session requires re-import"
-    error = str(status.get("lastError") or "")
-    if "HTTP 401" in error or "HTTP 403" in error or "HTTP 421" in error:
-        return error
-    return None
-
-
-def run_auto_refresh_once(manager: ICloudSessionManager = MANAGER) -> dict[str, Any]:
-    now = time.time()
-    config = load_auto_refresh_config(manager)
-    config["lastRunAt"] = now
-    try:
-        status = manager.check()
-    except HmeError as exc:
-        reason = str(exc)
-        if any(code in reason for code in ("HTTP 401", "HTTP 403", "HTTP 421")):
-            return {"autoRefresh": disable_auto_refresh(reason, manager), "session": None}
-        config["lastError"] = reason
-        return {"autoRefresh": save_auto_refresh_config(config, manager), "session": None}
-    reason = refresh_result_requires_disable(status)
-    if reason:
-        return {"autoRefresh": disable_auto_refresh(reason, manager), "session": status}
-    config.update({"lastSuccessAt": now, "lastError": None, "disabledReason": None})
-    return {"autoRefresh": save_auto_refresh_config(config, manager), "session": status}
-
-
-def auto_refresh_loop(manager: ICloudSessionManager = MANAGER) -> None:
-    while not AUTO_REFRESH_STOP.is_set():
-        try:
-            config = load_auto_refresh_config(manager)
-            if config.get("enabled"):
-                last_run = float(config.get("lastRunAt") or 0)
-                if time.time() - last_run >= config["intervalSeconds"]:
-                    run_auto_refresh_once(manager)
-        except Exception as exc:  # never let an unexpected error kill the worker
-            print(f"auto-refresh worker error: {exc}")
-        AUTO_REFRESH_STOP.wait(30)
-
-
-def start_auto_refresh_worker(manager: ICloudSessionManager = MANAGER) -> None:
-    global AUTO_REFRESH_THREAD
-    if AUTO_REFRESH_THREAD is not None and AUTO_REFRESH_THREAD.is_alive():
-        return
-    AUTO_REFRESH_STOP.clear()
-    AUTO_REFRESH_THREAD = threading.Thread(target=auto_refresh_loop, args=(manager,), name="hme-auto-refresh", daemon=True)
-    AUTO_REFRESH_THREAD.start()
-
-
-def stop_auto_refresh_worker() -> None:
-    AUTO_REFRESH_STOP.set()
-    if AUTO_REFRESH_THREAD is not None:
-        AUTO_REFRESH_THREAD.join(timeout=5)
-
-
 def health_payload() -> dict[str, Any]:
     return ok_response({"status": "ok"})
 
 
 def is_api_path(path: str) -> bool:
     return urlparse(path).path.startswith("/v1/")
+
+
+# ---------- /v1 route handlers ----------
+
+Handler = Callable[[Any, dict[str, Any], dict[str, str], dict[str, str]], dict[str, Any]]
+
+
+def _h_session_status(manager, body, query, params):
+    return session_status(manager)
+
+
+def _h_session_refresh(manager, body, query, params):
+    return refresh_session(manager)
+
+
+def _h_session_import(manager, body, query, params):
+    return import_session(manager, body)
+
+
+def _h_auto_refresh_get(manager, body, query, params):
+    return ok_response(auto_refresh.status(manager))
+
+
+def _h_auto_refresh_update(manager, body, query, params):
+    return ok_response(auto_refresh.update(body, manager))
+
+
+def _h_auto_refresh_run(manager, body, query, params):
+    return ok_response(auto_refresh.run_once(manager))
+
+
+def _h_aliases_list(manager, body, query, params):
+    return list_aliases(manager.get_client())
+
+
+def _h_aliases_export(manager, body, query, params):
+    return ok_response(export_aliases_csv(manager.get_client()))
+
+
+def _h_aliases_create(manager, body, query, params):
+    return create_alias(manager.get_client(), body)
+
+
+def _h_alias_disable(manager, body, query, params):
+    return disable_alias(manager.get_client(), unquote(params["anonymousId"]))
+
+
+def _h_alias_enable(manager, body, query, params):
+    return enable_alias(manager.get_client(), unquote(params["anonymousId"]))
+
+
+def _h_alias_delete(manager, body, query, params):
+    return delete_alias(manager.get_client(), unquote(params["anonymousId"]))
+
+
+def _h_mail_folders(manager, body, query, params):
+    return list_mail_folders(manager.get_mail_client())
+
+
+def _h_mail_messages(manager, body, query, params):
+    return list_mail_messages(manager.get_mail_client(), query)
+
+
+def _h_mail_message(manager, body, query, params):
+    return get_mail_message(manager.get_mail_client(), unquote(params["guid"]))
+
+
+ROUTES: tuple[tuple[str, re.Pattern[str], Handler], ...] = (
+    ("GET", re.compile(r"^/v1/session/status$"), _h_session_status),
+    ("POST", re.compile(r"^/v1/session/refresh$"), _h_session_refresh),
+    ("POST", re.compile(r"^/v1/session/import$"), _h_session_import),
+    ("GET", re.compile(r"^/v1/auto-refresh$"), _h_auto_refresh_get),
+    ("POST", re.compile(r"^/v1/auto-refresh$"), _h_auto_refresh_update),
+    ("POST", re.compile(r"^/v1/auto-refresh/run$"), _h_auto_refresh_run),
+    ("GET", re.compile(r"^/v1/aliases$"), _h_aliases_list),
+    ("GET", re.compile(r"^/v1/aliases/export\.csv$"), _h_aliases_export),
+    ("POST", re.compile(r"^/v1/aliases$"), _h_aliases_create),
+    ("POST", re.compile(r"^/v1/aliases/(?P<anonymousId>[^/]+)/disable$"), _h_alias_disable),
+    ("POST", re.compile(r"^/v1/aliases/(?P<anonymousId>[^/]+)/enable$"), _h_alias_enable),
+    ("POST", re.compile(r"^/v1/aliases/(?P<anonymousId>[^/]+)/delete$"), _h_alias_delete),
+    ("GET", re.compile(r"^/v1/mail/folders$"), _h_mail_folders),
+    ("GET", re.compile(r"^/v1/mail/messages$"), _h_mail_messages),
+    ("GET", re.compile(r"^/v1/mail/messages/(?P<guid>[^/]+)$"), _h_mail_message),
+)
 
 
 def dispatch_private_api(
@@ -217,40 +160,18 @@ def dispatch_private_api(
     manager: ICloudSessionManager,
     api_key: str | None,
 ) -> tuple[HTTPStatus, dict[str, Any]]:
-    parsed_path = urlparse(path).path
+    parsed = urlparse(path)
+    query = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
     try:
         require_api_key(headers, api_key)
-        if method == "GET" and parsed_path == "/v1/session/status":
-            return HTTPStatus.OK, session_status(manager)
-        if method == "POST" and parsed_path == "/v1/session/refresh":
-            return HTTPStatus.OK, refresh_session(manager)
-        if method == "POST" and parsed_path == "/v1/session/import":
-            return HTTPStatus.OK, import_session(manager, _json_body(body))
-        if method == "GET" and parsed_path == "/v1/auto-refresh":
-            return HTTPStatus.OK, ok_response(auto_refresh_status(manager))
-        if method == "POST" and parsed_path == "/v1/auto-refresh":
-            return HTTPStatus.OK, ok_response(update_auto_refresh(_json_body(body), manager))
-        if method == "POST" and parsed_path == "/v1/auto-refresh/run":
-            return HTTPStatus.OK, ok_response(run_auto_refresh_once(manager))
-        if method == "GET" and parsed_path == "/v1/aliases":
-            return HTTPStatus.OK, list_aliases(manager.get_client())
-        if method == "GET" and parsed_path == "/v1/aliases/export.csv":
-            csv_data = export_aliases_csv(manager.get_client())
-            return HTTPStatus.OK, ok_response(csv_data)
-        if method == "POST" and parsed_path == "/v1/aliases":
-            return HTTPStatus.OK, create_alias(manager.get_client(), _json_body(body))
-
-        alias_action = _alias_action(parsed_path)
-        if alias_action is not None and method == "POST":
-            anonymous_id, action = alias_action
-            client = manager.get_client()
-            if action == "disable":
-                return HTTPStatus.OK, disable_alias(client, anonymous_id)
-            if action == "delete":
-                return HTTPStatus.OK, delete_alias(client, anonymous_id)
-            if action == "enable":
-                return HTTPStatus.OK, enable_alias(client, anonymous_id)
-
+        for route_method, pattern, handler in ROUTES:
+            if route_method != method:
+                continue
+            match = pattern.match(parsed.path)
+            if match is None:
+                continue
+            payload = _json_body(body) if method == "POST" else {}
+            return HTTPStatus.OK, handler(manager, payload, query, match.groupdict())
         return HTTPStatus.NOT_FOUND, error_response("NOT_FOUND", "not found")
     except PermissionError as exc:
         return HTTPStatus.UNAUTHORIZED, error_response("UNAUTHORIZED", str(exc))
@@ -272,15 +193,6 @@ def _json_body(body: bytes) -> dict[str, Any]:
     return payload
 
 
-def _alias_action(path: str) -> tuple[str, str | None] | None:
-    parts = [part for part in path.split("/") if part]
-    if len(parts) == 3 and parts[:2] == ["v1", "aliases"]:
-        return parts[2], None
-    if len(parts) == 4 and parts[:2] == ["v1", "aliases"] and parts[3] in {"disable", "enable", "delete"}:
-        return parts[2], parts[3]
-    return None
-
-
 def _hme_error_code_and_status(message: str) -> tuple[str, HTTPStatus]:
     if "尚未匯入" in message or "Missing required config" in message or "Config file not found" in message:
         return "SESSION_MISSING", HTTPStatus.CONFLICT
@@ -290,7 +202,7 @@ def _hme_error_code_and_status(message: str) -> tuple[str, HTTPStatus]:
 
 
 class HmeWebHandler(BaseHTTPRequestHandler):
-    server_version = "HmeWeb/0.1"
+    server_version = "HmeWeb/0.2"
 
     def do_GET(self) -> None:
         try:
@@ -374,17 +286,20 @@ class HmeWebHandler(BaseHTTPRequestHandler):
 
 
 def create_server(host: str, port: int) -> HTTPServer:
-    return HTTPServer((host, port), HmeWebHandler)
+    # Threading keeps the UI responsive while a slow Apple request is in flight.
+    server = ThreadingHTTPServer((host, port), HmeWebHandler)
+    server.daemon_threads = True
+    return server
 
 
 def run(host: str, port: int) -> None:
     server = create_server(host, port)
-    start_auto_refresh_worker(MANAGER)
+    auto_refresh.start_worker(MANAGER)
     print(f"Listening on http://{host}:{port}")
     try:
         server.serve_forever()
     finally:
-        stop_auto_refresh_worker()
+        auto_refresh.stop_worker()
         server.server_close()
 
 

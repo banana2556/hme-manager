@@ -52,22 +52,56 @@ def import_session(manager: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("curl_text is required")
     from session_import import parse_import_text, save_imported_session
 
-    icloud_region = str(payload.get("icloud_region", "international")).strip().lower()
-    config = parse_import_text(curl_text, icloud_region)
+    config = parse_import_text(curl_text)
     save_imported_session(config, Path(manager.config_path), Path(manager.metadata_path))
-    manager.metadata = manager._load_metadata()
-    return ok_response(
-        {
-            "imported": True,
-            "icloudRegion": icloud_region,
-            "host": config["host"],
-        }
-    )
+    manager.reload()
+    return ok_response({"imported": True, "region": _region_of(config)})
+
+
+def _region_of(config: Mapping[str, Any]) -> str:
+    from hme import region_for_host
+
+    return region_for_host(str(config.get("host", "")))
 
 
 def export_aliases_csv(client: Any) -> str:
     from hme import aliases_to_csv
     return aliases_to_csv(client.list_aliases())
+
+
+def list_mail_folders(client: Any) -> dict[str, Any]:
+    return ok_response(client.list_folders())
+
+
+def list_mail_messages(client: Any, query: Mapping[str, Any]) -> dict[str, Any]:
+    folder = str(query.get("folder") or "").strip()
+    if not folder:
+        folder = str(client.inbox_folder().get("guid") or "")
+    if not folder:
+        raise ValueError("folder is required (no inbox folder could be detected)")
+    limit = _int_param(query, "limit", default=20, minimum=1, maximum=100)
+    offset = _int_param(query, "offset", default=0, minimum=0, maximum=None)
+    return ok_response(client.list_messages(folder, limit=limit, offset=offset))
+
+
+def get_mail_message(client: Any, message_guid: str) -> dict[str, Any]:
+    if not message_guid.strip():
+        raise ValueError("message guid is required")
+    return ok_response(client.get_message(message_guid))
+
+
+def _int_param(query: Mapping[str, Any], name: str, default: int, minimum: int, maximum: int | None) -> int:
+    raw = query.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = int(str(raw).strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
 def disable_alias(client: Any, anonymous_id: str) -> dict[str, Any]:

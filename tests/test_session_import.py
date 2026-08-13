@@ -21,32 +21,6 @@ class SessionImportTests(unittest.TestCase):
         self.assertEqual(config["clientMasteringNumber"], "2614Build17")
         self.assertIn("X-APPLE-DS-WEB-SESSION-TOKEN", config["cookie"])
 
-    def test_china_region_adds_cn_to_service_and_web_domains(self):
-        curl_text = r"""curl 'https://p119-maildomainws.icloud.com/v2/hme/list?clientBuildNumber=2614Build17&clientMasteringNumber=2614Build17&clientId=client-1&dsid=608658063' \
-  -H 'Origin: https://www.icloud.com' \
-  -H 'Referer: https://www.icloud.com/icloudplus/' \
-  -b 'X-APPLE-WEBAUTH-USER="user"; X-APPLE-WEBAUTH-TOKEN="token"; X-APPLE-DS-WEB-SESSION-TOKEN="session"'"""
-
-        config = parse_hme_curl(curl_text, "china")
-
-        self.assertEqual(config["host"], "p119-maildomainws.icloud.com.cn")
-        self.assertEqual(config["origin"], "https://www.icloud.com.cn")
-        self.assertEqual(config["referer"], "https://www.icloud.com.cn/icloudplus/")
-
-    def test_region_switch_normalizes_an_existing_cn_curl(self):
-        curl_text = r"""curl 'https://p119-maildomainws.icloud.com.cn/v2/hme/list?clientBuildNumber=2614Build17&clientMasteringNumber=2614Build17&clientId=client-1&dsid=608658063' \
-  -H 'Origin: https://www.icloud.com.cn' \
-  -H 'Referer: https://www.icloud.com.cn/' \
-  -b 'X-APPLE-WEBAUTH-USER="user"; X-APPLE-WEBAUTH-TOKEN="token"; X-APPLE-DS-WEB-SESSION-TOKEN="session"'"""
-
-        china_config = parse_hme_curl(curl_text, "china")
-        international_config = parse_hme_curl(curl_text, "international")
-
-        self.assertEqual(china_config["host"], "p119-maildomainws.icloud.com.cn")
-        self.assertEqual(china_config["origin"], "https://www.icloud.com.cn")
-        self.assertEqual(international_config["host"], "p119-maildomainws.icloud.com")
-        self.assertEqual(international_config["origin"], "https://www.icloud.com")
-
     def test_parse_complete_curl_extracts_only_needed_runtime_fields(self):
         curl_text = r"""curl 'https://p119-maildomainws.icloud.com/v2/hme/list?clientBuildNumber=2614Build21&clientMasteringNumber=2614Build21&clientId=af8cc870-51b6-4a3c-ac22-e34bd2ba621b&dsid=608658063' \
   -H 'Accept: */*' \
@@ -88,7 +62,7 @@ class SessionImportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "X-APPLE-DS-WEB-SESSION-TOKEN"):
             parse_hme_curl(curl_text)
 
-    def test_parse_import_text_finds_china_hme_request_inside_har(self):
+    def test_parse_import_text_finds_hme_request_inside_har(self):
         har = {
             "log": {
                 "entries": [
@@ -102,7 +76,7 @@ class SessionImportTests(unittest.TestCase):
                     {
                         "request": {
                             "url": (
-                                "https://p119-maildomainws.icloud.com.cn/v2/hme/list?"
+                                "https://p119-maildomainws.icloud.com/v2/hme/list?"
                                 "clientBuildNumber=2614Build17&"
                                 "clientMasteringNumber=2614Build17&"
                                 "clientId=client-1&"
@@ -125,10 +99,9 @@ class SessionImportTests(unittest.TestCase):
             }
         }
 
-        config = parse_import_text(json.dumps(har), "china")
+        config = parse_import_text(json.dumps(har))
 
-        self.assertEqual(config["host"], "p119-maildomainws.icloud.com.cn")
-        self.assertEqual(config["origin"], "https://www.icloud.com.cn")
+        self.assertEqual(config["host"], "p119-maildomainws.icloud.com")
         self.assertEqual(config["clientId"], "client-1")
         self.assertIn("X-APPLE-DS-WEB-SESSION-TOKEN", config["cookie"])
 
@@ -168,9 +141,75 @@ class SessionImportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "maildomainws"):
             parse_hme_curl("curl 'https://www.icloud.com/' -b 'a=b'")
 
-    def test_parse_import_text_rejects_unknown_region(self):
-        with self.assertRaisesRegex(ValueError, "icloud_region"):
-            parse_import_text("curl 'https://www.icloud.com/'", "unknown")
+    def test_parse_hme_curl_accepts_china_host_and_fills_region_defaults(self):
+        curl_text = r"""curl 'https://p30-maildomainws.icloud.com.cn/v2/hme/list?clientBuildNumber=2626Build17&clientMasteringNumber=2626Build17&clientId=client-cn&dsid=12345678' \
+  -H 'accept: */*' \
+  -b 'X-APPLE-WEBAUTH-USER="user"; X-APPLE-WEBAUTH-TOKEN="token"; X-APPLE-DS-WEB-SESSION-TOKEN="session"'"""
+
+        config = parse_hme_curl(curl_text)
+
+        self.assertEqual(config["host"], "p30-maildomainws.icloud.com.cn")
+        self.assertEqual(config["dsid"], "12345678")
+        self.assertEqual(config["langCode"], "zh-cn")
+        self.assertEqual(config["origin"], "https://www.icloud.com.cn")
+        self.assertEqual(config["referer"], "https://www.icloud.com.cn/")
+
+    def test_parse_hme_curl_keeps_captured_china_origin_header(self):
+        curl_text = r"""curl 'https://p30-maildomainws.icloud.com.cn/v2/hme/list?clientBuildNumber=2626Build17&clientMasteringNumber=2626Build17&clientId=client-cn&dsid=12345678' \
+  -H 'Origin: https://www.icloud.com.cn' \
+  -H 'Referer: https://www.icloud.com.cn/' \
+  -b 'X-APPLE-WEBAUTH-USER="user"; X-APPLE-WEBAUTH-TOKEN="token"; X-APPLE-DS-WEB-SESSION-TOKEN="session"'"""
+
+        config = parse_hme_curl(curl_text)
+
+        self.assertEqual(config["origin"], "https://www.icloud.com.cn")
+        self.assertEqual(config["referer"], "https://www.icloud.com.cn/")
+
+    def test_parse_import_text_finds_china_hme_request_inside_har(self):
+        har = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "url": (
+                                "https://p30-maildomainws.icloud.com.cn/v2/hme/list?"
+                                "clientBuildNumber=2626Build17&"
+                                "clientMasteringNumber=2626Build17&"
+                                "clientId=client-cn&"
+                                "dsid=12345678"
+                            ),
+                            "headers": [
+                                {
+                                    "name": "Cookie",
+                                    "value": (
+                                        'X-APPLE-WEBAUTH-USER="user"; '
+                                        'X-APPLE-WEBAUTH-TOKEN="token"; '
+                                        'X-APPLE-DS-WEB-SESSION-TOKEN="session"'
+                                    ),
+                                }
+                            ],
+                            "cookies": [],
+                        }
+                    }
+                ]
+            }
+        }
+
+        config = parse_import_text(json.dumps(har))
+
+        self.assertEqual(config["host"], "p30-maildomainws.icloud.com.cn")
+        self.assertEqual(config["langCode"], "zh-cn")
+        self.assertEqual(config["origin"], "https://www.icloud.com.cn")
+
+    def test_parse_hme_curl_fills_global_defaults_when_headers_missing(self):
+        curl_text = r"""curl 'https://p119-maildomainws.icloud.com/v2/hme/list?clientBuildNumber=2614Build17&clientMasteringNumber=2614Build17&clientId=client-1&dsid=608658063' \
+  -b 'X-APPLE-WEBAUTH-USER="user"; X-APPLE-WEBAUTH-TOKEN="token"; X-APPLE-DS-WEB-SESSION-TOKEN="session"'"""
+
+        config = parse_hme_curl(curl_text)
+
+        self.assertEqual(config["origin"], "https://www.icloud.com")
+        self.assertEqual(config["referer"], "https://www.icloud.com/")
+        self.assertEqual(config["langCode"], "zh-tw")
 
     def test_save_imported_session_writes_config_and_metadata(self):
         config = {

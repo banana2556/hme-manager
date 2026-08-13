@@ -22,17 +22,20 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <a class="brand-logo" href="https://github.com/banana2556/icloud-mail-bot" target="_blank" rel="noopener" aria-label="專案 GitHub">
+        <a class="brand-logo" href="https://github.com/banana2556/hme-manager" target="_blank" rel="noopener" aria-label="專案 GitHub">
           <img src="/static/logo.svg" width="38" height="38" alt="HME Manager logo">
         </a>
         <div class="brand-meta">
-          <a class="brand-name" href="https://github.com/banana2556/icloud-mail-bot" target="_blank" rel="noopener">HME Manager</a>
+          <a class="brand-name" href="https://github.com/banana2556/hme-manager" target="_blank" rel="noopener">HME Manager</a>
           <a class="brand-author" href="https://github.com/banana2556" target="_blank" rel="noopener">@banana2556</a>
         </div>
       </div>
       <nav class="nav">
         <button type="button" class="nav-item active" data-view="aliases" aria-label="信箱清單" title="信箱清單">
           <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span><span>信箱清單</span>
+        </button>
+        <button type="button" class="nav-item" data-view="inbox" aria-label="收件匣" title="收件匣">
+          <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg></span><span>收件匣</span>
         </button>
         <button type="button" class="nav-item" data-view="builder" aria-label="API Builder" title="API Builder">
           <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span><span>API Builder</span>
@@ -85,6 +88,10 @@
               <svg class="alias-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
               <span class="alias-action-label">重新整理</span>
             </button>
+            <button id="exportCsvBtn" type="button" aria-label="匯出 CSV" title="匯出 CSV">
+              <svg class="alias-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span class="alias-action-label">匯出 CSV</span>
+            </button>
           </div>
           <form id="createAliasForm" class="create-form" hidden>
             <input id="createLabel" type="text" placeholder="label（必填）" autocomplete="off">
@@ -98,6 +105,28 @@
           </div>
           <div id="table" class="table-wrap"></div>
           <pre id="aliasSource" class="code alias-source" hidden>[]</pre>
+        </section>
+
+        <!-- ========== 收件匣 ========== -->
+        <section id="view-inbox" class="view" hidden>
+          <div class="view-actions inbox-toolbar">
+            <select id="mailFolderSelect" aria-label="選擇郵件資料夾">
+              <option value="">載入資料夾中…</option>
+            </select>
+            <span class="spacer"></span>
+            <button id="refreshMailBtn" type="button" aria-label="重新整理郵件" title="重新整理郵件">
+              <svg class="alias-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              <span class="alias-action-label">重新整理</span>
+            </button>
+          </div>
+          <div class="inbox-grid">
+            <div id="mailList" class="mail-list">
+              <div class="empty-state">尚未載入郵件。匯入 Session 後即可讀取 iCloud 收件匣。</div>
+            </div>
+            <section id="mailReader" class="card mail-reader">
+              <div class="empty-state">從左側選擇一封郵件即可閱讀內容；偵測到驗證碼時可一鍵複製。</div>
+            </section>
+          </div>
         </section>
 
         <!-- ========== API Builder ========== -->
@@ -128,6 +157,15 @@
                   </button>
                   <button type="button" class="endpoint-row" data-endpoint="delete" aria-pressed="false">
                     <span class="endpoint-method">[POST]</span><span class="endpoint-name">刪除信箱</span><code class="endpoint-path">/v1/aliases/{anonymousId}/delete</code>
+                  </button>
+                  <button type="button" class="endpoint-row" data-endpoint="mailFolders" aria-pressed="false">
+                    <span class="endpoint-method">[GET]</span><span class="endpoint-name">郵件資料夾</span><code class="endpoint-path">/v1/mail/folders</code>
+                  </button>
+                  <button type="button" class="endpoint-row" data-endpoint="mailMessages" aria-pressed="false">
+                    <span class="endpoint-method">[GET]</span><span class="endpoint-name">郵件清單</span><code class="endpoint-path">/v1/mail/messages</code>
+                  </button>
+                  <button type="button" class="endpoint-row" data-endpoint="mailMessage" aria-pressed="false">
+                    <span class="endpoint-method">[GET]</span><span class="endpoint-name">讀取郵件</span><code class="endpoint-path">/v1/mail/messages/{guid}</code>
                   </button>
                 </div>
               </div>
@@ -167,6 +205,7 @@
                 <dt>必要資料</dt><dd id="sessionRequired">未檢查</dd>
                 <dt>DSID</dt><dd id="sessionDsid">未知</dd>
                 <dt>Host</dt><dd id="sessionHost">未知</dd>
+                <dt>區域</dt><dd id="sessionRegion">未知</dd>
                 <dt>最近保存</dt><dd id="sessionSavedAt">未知</dd>
                 <dt>最近同步</dt><dd id="sessionSyncedAt">尚未同步</dd>
                 <dt>狀態</dt><dd id="sessionState">可能過期：尚未檢查</dd>
@@ -189,24 +228,11 @@
           </div>
           <section class="card import-card">
             <h3>手動匯入 Session</h3>
-            <fieldset class="icloud-region-selector" aria-describedby="icloudRegionHint">
-              <legend>iCloud 服務區域</legend>
-              <div class="icloud-region-switch">
-                <label class="icloud-region-option">
-                  <input type="radio" name="icloudRegion" value="international" checked>
-                  <span>國際版</span>
-                </label>
-                <label class="icloud-region-option">
-                  <input type="radio" name="icloudRegion" value="china">
-                  <span>中國大陸版</span>
-                </label>
-              </div>
-              <p id="icloudRegionHint" class="region-hint">使用 <code>icloud.com</code> 服務域名。</p>
-            </fieldset>
             <ol class="card-hint import-steps">
-              <li>前往 <a id="icloudPortalLink" href="https://www.icloud.com/icloudplus/" target="_blank" rel="noopener">iCloud+</a>，開啟 <strong>Hide My Email（隱藏我的電子郵件）</strong>。</li>
+              <li>前往 <a href="https://www.icloud.com/icloudplus/" target="_blank" rel="noopener">iCloud+</a>（大陸帳號請改用 <a href="https://www.icloud.com.cn/icloudplus/" target="_blank" rel="noopener">icloud.com.cn</a>），開啟 <strong>Hide My Email（隱藏我的電子郵件）</strong>。</li>
               <li>按 <strong>F12</strong> 開啟 DevTools → Network，找到包含 <code>list?clientBuildNumber</code> 的請求。</li>
-              <li>對該請求選擇 <strong>Copy as cURL (bash)</strong>，貼到下方；也可貼上包含 request cookies 的 HAR JSON。</li>
+              <li>對該請求選擇 <strong>Copy as cURL (bash)</strong>，貼到下方；也可貼上包含 request cookies 的 HAR JSON。區域會依主機自動判定。</li>
+              <li>若要在「收件匣」讀信，請先在 iCloud 網頁開啟過一次 <strong>郵件</strong> 再複製請求，確保 cookie 帶有郵件授權。</li>
             </ol>
             <textarea id="importCurl" spellcheck="false" placeholder="貼上 list?clientBuildNumber 請求的 Copy as cURL (bash) 或 HAR JSON"></textarea>
             <div class="actions">
@@ -218,6 +244,7 @@
       </div>
     </main>
   </div>
+  <div id="toasts" class="toasts" aria-live="polite" aria-label="操作通知"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>
