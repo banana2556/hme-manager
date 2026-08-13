@@ -55,6 +55,25 @@ class SessionImportTests(unittest.TestCase):
         self.assertEqual(config["referer"], "https://www.icloud.com/")
         self.assertNotIn("sec-ch-ua", json.dumps(config))
 
+    def test_parse_hme_curl_accepts_url_flag_format(self):
+        # Newer Chrome builds copy `curl --url '...'` instead of `curl '...'`,
+        # with Origin/Referer URLs appearing later in the text.
+        curl_text = r"""curl --url 'https://p119-maildomainws.icloud.com/v2/hme/list?clientBuildNumber=2628Build19&clientMasteringNumber=2628Build19&clientId=0cb3e48f-3a83-4564-923b-3b71528d5989&dsid=608658063' \
+  -H 'Accept: */*' \
+  -H 'Content-Type: text/plain' \
+  -b 'x-apple-group=false; X-APPLE-WEBAUTH-PCS-Mail="fake-mail-token"; X-APPLE-WEBAUTH-LOGIN="fake"; X-APPLE-WEBAUTH-USER="v=1:s=1:d=608658063"; X-APPLE-DS-WEB-SESSION-TOKEN="fake-session"; X-APPLE-WEBAUTH-VALIDATE="fake"; X-APPLE-WEBAUTH-TOKEN="fake-token"' \
+  -H 'Origin: https://www.icloud.com' \
+  -H 'Referer: https://www.icloud.com/' \
+  -H 'User-Agent: Mozilla/5.0 Test Browser'"""
+
+        config = parse_hme_curl(curl_text)
+
+        self.assertEqual(config["host"], "p119-maildomainws.icloud.com")
+        self.assertEqual(config["dsid"], "608658063")
+        self.assertEqual(config["clientBuildNumber"], "2628Build19")
+        self.assertIn("X-APPLE-WEBAUTH-PCS-Mail", config["cookie"])
+        self.assertEqual(config["origin"], "https://www.icloud.com")
+
     def test_parse_complete_curl_requires_core_icloud_session_cookies(self):
         curl_text = r"""curl 'https://p119-maildomainws.icloud.com/v2/hme/list?clientBuildNumber=2614Build21&clientMasteringNumber=2614Build21&clientId=client-1&dsid=608658063' \
   -b 'X-APPLE-WEBAUTH-VALIDATE="validate-only"'"""

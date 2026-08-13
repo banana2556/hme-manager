@@ -76,13 +76,27 @@ def save_imported_session(config: dict[str, str], config_path: Path, metadata_pa
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# Browsers keep changing the copied flag layout (`curl 'URL'`, `curl --location 'URL'`,
+# `curl --url 'URL'`, ...), so collect every https URL and prefer the HME request.
+_URL_CANDIDATE_PATTERNS = (
+    r"""(?P<quote>['"])(?P<url>https://.+?)(?P=quote)""",
+    r"""(?P<url>https://[^\s'"\\]+)""",
+)
+
+
 def _extract_url(curl_text: str) -> str:
-    match = re.search(r"""curl\s+(?:--location\s+)?(?P<quote>['"])(?P<url>https://.+?)(?P=quote)""", curl_text, re.S)
-    if match:
-        return match.group("url").strip()
-    match = re.search(r"""curl\s+(?P<url>https://[^\s\\]+)""", curl_text, re.S)
-    if match:
-        return match.group("url").strip()
+    candidates: list[str] = []
+    for pattern in _URL_CANDIDATE_PATTERNS:
+        for match in re.finditer(pattern, curl_text, re.S):
+            url = match.group("url").strip()
+            if url and url not in candidates:
+                candidates.append(url)
+    for url in candidates:
+        parsed = urlparse(url)
+        if is_hme_host(parsed.netloc) and "/hme/" in parsed.path:
+            return url
+    if candidates:
+        return candidates[0]
     raise ValueError("Could not find URL in cURL text")
 
 
