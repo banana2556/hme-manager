@@ -506,6 +506,18 @@ tbody tr:hover { background: var(--panel-2); }
 .stack-lg { display: grid; gap: 18px; }
 .request-editor { width: 100%; min-height: 190px; }
 .request-actions { margin-top: 10px; }
+.path-param-row { margin-bottom: 10px; }
+.path-param-row select { width: 100%; max-width: 460px; }
+.response-kind {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 8px; padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--muted); background: var(--panel-2);
+  vertical-align: 2px;
+}
+.response-kind::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.response-kind.actual { color: var(--ok); background: var(--ok-soft); }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .compact-pre { max-height: 130px; }
 .response-json {
@@ -519,6 +531,8 @@ tbody tr:hover { background: var(--panel-2); }
   white-space: pre-wrap; overflow-wrap: anywhere;
   margin: 0;
 }
+/* Dashed = "not sent yet": the example must never read as a real result. */
+.example-output { border-style: dashed; }
 
 /* ---------- session view ---------- */
 .session-cols {

@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-13T05:35:00Z",
+  "title": "Design System: HME Manager",
+  "extensions": {
+    "colorMeta": {
+      "console-fog": { "role": "neutral", "displayName": "調度台霧灰 Console Fog", "canonical": "#f4f5f7", "darkValue": "#0e1015", "tonalRamp": ["oklch(15% 0.005 250)", "oklch(27% 0.005 250)", "oklch(38% 0.005 250)", "oklch(50% 0.005 250)", "oklch(62% 0.005 250)", "oklch(74% 0.005 250)", "oklch(86% 0.005 250)", "oklch(96% 0.005 250)"] },
+      "panel-white": { "role": "neutral", "displayName": "面板白 Panel White", "canonical": "#ffffff", "darkValue": "#161920", "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(38% 0 0)", "oklch(50% 0 0)", "oklch(62% 0 0)", "oklch(74% 0 0)", "oklch(86% 0 0)", "oklch(97% 0 0)"] },
+      "recessed-gray": { "role": "neutral", "displayName": "凹面灰 Recessed Gray", "canonical": "#f6f7f9", "darkValue": "#1d212b", "tonalRamp": ["oklch(15% 0.005 250)", "oklch(27% 0.005 250)", "oklch(38% 0.005 250)", "oklch(50% 0.005 250)", "oklch(62% 0.005 250)", "oklch(74% 0.005 250)", "oklch(86% 0.005 250)", "oklch(97% 0.005 250)"] },
+      "console-ink": { "role": "neutral", "displayName": "墨黑 Console Ink", "canonical": "#17181c", "darkValue": "#e8eaf0", "tonalRamp": ["oklch(15% 0.005 260)", "oklch(25% 0.005 260)", "oklch(37% 0.005 260)", "oklch(49% 0.005 260)", "oklch(61% 0.005 260)", "oklch(73% 0.005 260)", "oklch(85% 0.005 260)", "oklch(95% 0.005 260)"] },
+      "dimmed-signal": { "role": "neutral", "displayName": "弱訊灰藍 Dimmed Signal", "canonical": "#5c6674", "darkValue": "#949eb1", "tonalRamp": ["oklch(15% 0.02 255)", "oklch(26% 0.02 255)", "oklch(37% 0.02 255)", "oklch(48% 0.02 255)", "oklch(60% 0.02 255)", "oklch(72% 0.02 255)", "oklch(84% 0.02 255)", "oklch(95% 0.02 255)"] },
+      "hairline": { "role": "neutral", "displayName": "髮絲線 Hairline", "canonical": "#e4e7ec", "darkValue": "#262c38", "tonalRamp": ["oklch(15% 0.008 255)", "oklch(27% 0.008 255)", "oklch(38% 0.008 255)", "oklch(50% 0.008 255)", "oklch(62% 0.008 255)", "oklch(74% 0.008 255)", "oklch(86% 0.008 255)", "oklch(94% 0.008 255)"] },
+      "dispatch-blue": { "role": "primary", "displayName": "調度藍 Dispatch Blue", "canonical": "#0669dd", "darkValue": "#4899ff", "tonalRamp": ["oklch(15% 0.19 255)", "oklch(25% 0.19 255)", "oklch(35% 0.19 255)", "oklch(46% 0.19 255)", "oklch(56% 0.19 255)", "oklch(67% 0.15 255)", "oklch(80% 0.10 255)", "oklch(93% 0.04 255)"] },
+      "deep-dispatch": { "role": "primary", "displayName": "深調度 Deep Dispatch", "canonical": "#0353b8", "darkValue": "#77b6ff", "tonalRamp": ["oklch(15% 0.17 255)", "oklch(24% 0.17 255)", "oklch(33% 0.17 255)", "oklch(43% 0.17 255)", "oklch(53% 0.17 255)", "oklch(65% 0.13 255)", "oklch(79% 0.09 255)", "oklch(92% 0.04 255)"] },
+      "dispatch-text": { "role": "primary", "displayName": "調度文字 Dispatch Text", "canonical": "#0353b8", "darkValue": "#82bbff", "tonalRamp": ["oklch(15% 0.17 255)", "oklch(24% 0.17 255)", "oklch(33% 0.17 255)", "oklch(43% 0.17 255)", "oklch(53% 0.17 255)", "oklch(65% 0.13 255)", "oklch(79% 0.09 255)", "oklch(92% 0.04 255)"] },
+      "signal-green": { "role": "tertiary", "displayName": "通行綠 Signal Green", "canonical": "#189e6a", "darkValue": "#3ecf8e", "tonalRamp": ["oklch(15% 0.09 160)", "oklch(26% 0.10 160)", "oklch(37% 0.11 160)", "oklch(48% 0.12 160)", "oklch(60% 0.13 160)", "oklch(72% 0.13 160)", "oklch(84% 0.10 160)", "oklch(94% 0.05 160)"] },
+      "caution-amber": { "role": "tertiary", "displayName": "警示琥珀 Caution Amber", "canonical": "#a06a13", "darkValue": "#e2b03a", "tonalRamp": ["oklch(15% 0.06 80)", "oklch(26% 0.08 80)", "oklch(37% 0.10 80)", "oklch(48% 0.11 80)", "oklch(60% 0.12 80)", "oklch(72% 0.12 80)", "oklch(84% 0.09 80)", "oklch(94% 0.05 80)"] },
+      "alert-red": { "role": "tertiary", "displayName": "告警紅 Alert Red", "canonical": "#cf3340", "darkValue": "#ff6369", "tonalRamp": ["oklch(15% 0.10 20)", "oklch(26% 0.13 20)", "oklch(37% 0.16 20)", "oklch(48% 0.18 20)", "oklch(58% 0.19 20)", "oklch(70% 0.15 20)", "oklch(82% 0.10 20)", "oklch(93% 0.05 20)"] }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "頂欄視圖標題（15.5px/700）。" },
+      "heading": { "displayName": "Heading", "purpose": "卡片標題 h3（13.5px/700）。" },
+      "body": { "displayName": "Body", "purpose": "正文 14px、控件 13px。" },
+      "label": { "displayName": "Label", "purpose": "表頭與欄位標籤：11px/700 uppercase 0.05em。" },
+      "mono": { "displayName": "Mono", "purpose": "只給資料：地址、guid、代碼、curl、時間戳。" }
+    },
+    "shadows": [
+      { "name": "overlay", "value": "0 12px 32px rgba(16, 24, 40, 0.16)", "purpose": "懸浮層專用：toast 與 API Key 彈窗（暗色 0 16px 40px rgba(0,0,0,0.55)）。" },
+      { "name": "segment-thumb", "value": "0 1px 2px rgba(16, 24, 40, 0.10)", "purpose": "分段控件選中頁籤的滑塊。" }
+    ],
+    "motion": [
+      { "name": "state-transition", "value": "background 0.13s ease, border-color 0.13s ease, color 0.13s ease", "purpose": "控件狀態切換；不位移、不縮放。" },
+      { "name": "toast-in", "value": "0.18s ease-out (translateY(8px) → 0, fade)", "purpose": "全站唯一的授權進場動效；離場 0.22s 反向。" }
+    ],
+    "breakpoints": [
+      { "name": "mobile", "value": "960px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "當前動作唯一的實心藍鈕；hover 深調度，不位移。",
+      "html": "<button class=\"ds-btn-primary\">匯入並刷新</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 13px; border: 1px solid transparent; border-radius: 9px; background: var(--accent, #0669dd); color: #ffffff; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.13s ease; } .ds-btn-primary:hover { background: var(--accent-strong, #0353b8); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent, #0669dd); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "預設按鈕：面板白底 + hairline；hover 凹面灰。",
+      "html": "<button class=\"ds-btn\">重新整理</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 13px; border: 1px solid var(--line, #e4e7ec); border-radius: 9px; background: var(--panel, #ffffff); color: var(--ink, #17181c); font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.13s ease, border-color 0.13s ease; } .ds-btn:hover { background: var(--panel-2, #f6f7f9); } .ds-btn:focus-visible { outline: 2px solid var(--accent, #0669dd); outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "破壞性動作的幽靈紅：透明底，hover 紅染。",
+      "html": "<button class=\"ds-btn-danger\">刪除</button>",
+      "css": ".ds-btn-danger { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 0 13px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--danger, #cf3340); font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.13s ease; } .ds-btn-danger:hover { background: var(--danger-soft, rgba(207,51,64,0.10)); } .ds-btn-danger:focus-visible { outline: 2px solid var(--accent, #0669dd); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "hairline 輸入框；聚焦轉調度藍邊 + 調度染外暈。",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"搜尋 hme / label / note\">",
+      "css": ".ds-input { min-height: 34px; padding: 6px 11px; border: 1px solid var(--line, #e4e7ec); border-radius: 9px; background: var(--panel, #ffffff); color: var(--ink, #17181c); font-size: 13px; transition: border-color 0.13s ease, box-shadow 0.13s ease; } .ds-input::placeholder { color: var(--muted, #5c6674); } .ds-input:focus { outline: none; border-color: var(--accent, #0669dd); box-shadow: 0 0 0 3px var(--accent-soft, rgba(6,105,221,0.10)); }"
+    },
+    {
+      "name": "Nav Item (active)",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "側欄膠囊的激活態：調度染底 + 調度文字。",
+      "html": "<button class=\"ds-nav-item active\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"18\" height=\"18\"><rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/><path d=\"m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7\"/></svg><span>收件匣</span></button>",
+      "css": ".ds-nav-item { display: flex; align-items: center; gap: 11px; min-height: 38px; padding: 0 12px; border: none; border-radius: 10px; background: transparent; color: var(--muted, #5c6674); font-size: 13.5px; font-weight: 500; cursor: pointer; transition: background 0.14s ease, color 0.14s ease; } .ds-nav-item:hover { background: var(--panel-2, #f6f7f9); color: var(--ink, #17181c); } .ds-nav-item.active { background: var(--accent-soft, rgba(6,105,221,0.10)); color: var(--accent-text, #0353b8); font-weight: 600; }"
+    },
+    {
+      "name": "驗證碼藥丸 Code Chip",
+      "kind": "custom",
+      "refersTo": "code-chip",
+      "description": "偵測到驗證碼時的一鍵複製藥丸——「驗證碼是心跳」的視覺化身。",
+      "html": "<button class=\"ds-code-chip\">驗證碼 <strong>482913</strong>（點擊複製）</button>",
+      "css": ".ds-code-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 15px; border: 1px solid var(--accent, #0669dd); border-radius: 999px; background: var(--accent-soft, rgba(6,105,221,0.10)); color: var(--accent-text, #0353b8); font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.13s ease, color 0.13s ease; } .ds-code-chip strong { font-size: 15.5px; letter-spacing: 0.1em; font-variant-numeric: tabular-nums; } .ds-code-chip:hover { background: var(--accent, #0669dd); color: #ffffff; }"
+    },
+    {
+      "name": "Mail List Item (unread)",
+      "kind": "custom",
+      "refersTo": "mail-item",
+      "description": "未讀郵件列：700 字重 + 調度藍圓點雙訊號。",
+      "html": "<button class=\"ds-mail-item unread\"><span class=\"ds-mail-top\"><span class=\"ds-mail-from\">ChatGPT</span><span class=\"ds-mail-date\">11:42</span></span><span class=\"ds-mail-subject\">Your verification code</span><span class=\"ds-mail-snippet\">Your code is 482913</span></button>",
+      "css": ".ds-mail-item { display: grid; gap: 3px; width: 100%; text-align: left; padding: 12px 15px; border: none; border-bottom: 1px solid var(--soft-line, #eef0f4); background: transparent; font-weight: 400; cursor: pointer; transition: background 0.12s ease; } .ds-mail-item:hover { background: var(--panel-2, #f6f7f9); } .ds-mail-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; } .ds-mail-from { font-size: 13px; color: var(--ink, #17181c); } .ds-mail-item.unread .ds-mail-from { font-weight: 700; } .ds-mail-item.unread .ds-mail-from::before { content: \"\"; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--accent, #0669dd); } .ds-mail-date { font-size: 11px; color: var(--muted, #5c6674); font-variant-numeric: tabular-nums; } .ds-mail-subject { font-size: 13px; color: var(--ink, #17181c); } .ds-mail-item.unread .ds-mail-subject { font-weight: 700; } .ds-mail-snippet { font-size: 12px; color: var(--muted, #5c6674); }"
+    },
+    {
+      "name": "Toast (success)",
+      "kind": "custom",
+      "refersTo": "toast",
+      "description": "懸浮通知：hairline + 懸浮陰影 + 狀態圓點開頭。",
+      "html": "<div class=\"ds-toast ok\">已複製新信箱：concern.cellist_8z@icloud.com</div>",
+      "css": ".ds-toast { display: flex; align-items: flex-start; gap: 9px; max-width: 380px; padding: 11px 14px; border: 1px solid var(--line, #e4e7ec); border-radius: 11px; background: var(--panel, #ffffff); color: var(--ink, #17181c); font-size: 13px; line-height: 1.45; box-shadow: 0 12px 32px rgba(16, 24, 40, 0.16); } .ds-toast::before { content: \"\"; width: 8px; height: 8px; flex: none; margin-top: 5px; border-radius: 50%; background: var(--accent, #0669dd); } .ds-toast.ok::before { background: var(--ok, #189e6a); }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "active/inactive 徽章：圓點 + 染底藥丸。",
+      "html": "<span class=\"ds-badge on\">active</span> <span class=\"ds-badge off\">inactive</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; } .ds-badge::before { content: \"\"; width: 6px; height: 6px; border-radius: 50%; background: currentColor; } .ds-badge.on { color: var(--ok, #189e6a); background: var(--ok-soft, rgba(24,158,106,0.12)); } .ds-badge.off { color: var(--muted, #5c6674); background: var(--panel-2, #f6f7f9); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "調度室（The Dispatch Desk）",
+    "overview": "這是一間單人機房的操作台：安靜、精確、一切一眼可讀。介面不表演，只調度——別名、session、驗證碼在幾秒內各就各位。每個表面都假設操作者熟門熟路，因此資訊密度偏工具而非行銷，層級靠 hairline 與留白而非裝飾建立，唯一的藍色只在「現在該看這裡」的地方出現。視覺哲學：精確而克制。控件手感像儀表開關——邊界清晰、回饋即時、不位移不彈跳。亮暗雙主題服務不同機房照明，語義不變。",
+    "keyCharacteristics": [
+      "平面 hairline 層級：邊框定義面板，陰影只屬於懸浮層",
+      "單一 accent（調度藍），狀態色只講狀態（綠/琥珀/紅）",
+      "圓點是狀態語言：session 指示、未讀、toast 一律小圓點",
+      "mono 只給資料：地址、代碼、時間戳",
+      "繁體中文短句文案，控件直接說出動作"
+    ],
+    "rules": [
+      { "name": "The One-Accent Rule", "body": "全站只有調度藍一支 accent；它出現在 ≤10% 的畫面上。想強調，先用字重與層級，別加顏色。", "section": "colors" },
+      { "name": "The Accent-Text Rule", "body": "accent 色的「文字」永遠走 --accent-text；--accent 本體只給表面、環與圓點。這條規則就是對比度的保險絲。", "section": "colors" },
+      { "name": "The Status-Is-Status Rule", "body": "綠/琥珀/紅只講狀態，不做裝飾；反之狀態永遠帶顏色以外的第二訊號（文字或圓點位置）。", "section": "colors" },
+      { "name": "The Mono-Is-Data Rule", "body": "mono 只用於資料本身（地址、guid、代碼、JSON），絕不當「科技感」裝飾。", "section": "typography" },
+      { "name": "The One-Elevation Rule", "body": "每個表面只宣告一種層級手段：面板用邊框、懸浮層用陰影。1px 邊框疊寬陰影的「幽靈卡」不存在於這個系統。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 面板一律 1px hairline 邊框、無陰影；陰影只給 toast、彈窗、分段滑塊。",
+      "Do accent 文字一律 --accent-text（≥4.5:1）；accent 面積 ≤10%。",
+      "Do 狀態用「顏色 + 圓點/文字」雙訊號；未讀用字重 700 + 圓點。",
+      "Do 聚焦一律 2px 調度藍外環 offset 2px；鍵盤路徑與滑鼠等權。",
+      "Do 觸控目標移動端 ≥34px（主要控件 40px+）；表格窄屏橫向滾動。",
+      "Do 郵件 HTML 內文只在 sandbox iframe（白底）中渲染。"
+    ],
+    "donts": [
+      "Don't 彩色 border-left/right 色條（>1px）——狀態走圓點，選中走底色。",
+      "Don't 漸層文字、裝飾性玻璃/模糊（毛玻璃只屬於頂欄的定位功能）。",
+      "Don't 引入第二支 accent 色相或展示字體。",
+      "Don't hover/active 位移或彈跳；回饋只用底色與邊框。",
+      "Don't mono 當裝飾；非資料文字一律系統字。",
+      "Don't 在面板上疊「邊框+陰影」雙層級（幽靈卡）。"
+    ]
+  }
+}

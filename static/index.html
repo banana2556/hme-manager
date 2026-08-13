@@ -179,6 +179,11 @@
             <section class="card stack-lg">
               <div>
                 <h3>API Request JSON</h3>
+                <div id="pathParamRow" class="path-param-row" hidden>
+                  <label for="pathParamSelect"><span id="pathParamText">選擇 anonymousId</span>
+                    <select id="pathParamSelect"></select>
+                  </label>
+                </div>
                 <textarea id="requestPreview" class="code request-editor" spellcheck="false">{}</textarea>
                 <div class="actions request-actions">
                   <button id="sendBtn" type="button" class="primary">送出</button>
@@ -189,7 +194,7 @@
                 <pre id="curlOutput" class="code compact-pre">curl -H "X-API-Key: &lt;API_KEY&gt;" http://127.0.0.1:8000/v1/aliases</pre>
               </div>
               <div>
-                <h3>API Response JSON</h3>
+                <h3>API Response JSON <span id="responseKind" class="response-kind">回應範例</span></h3>
                 <pre id="responsePreview" class="response-json example-output">{}</pre>
                 <pre id="actualOutput" class="response-json actual-output" hidden>尚未送出</pre>
               </div>

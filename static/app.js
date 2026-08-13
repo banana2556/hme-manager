@@ -61,6 +61,8 @@ const mailDetailCache = new Map();
 let mailAliasFilter = "";
 let currentMailGuid = null;
 let inboxLoadedOnce = false;
+let mailPollTimer = null;
+const MAIL_POLL_MS = 20000;
 
 const operations = {
   status: { method: "GET", path: "/v1/session/status", body: null },
@@ -153,14 +155,22 @@ function show(data, isError = false) {
   }
   showActualOutput(data);
 }
+function setResponseKind(actual) {
+  const chip = $("responseKind");
+  if (!chip) return;
+  chip.textContent = actual ? "實際回應" : "回應範例";
+  chip.classList.toggle("actual", actual);
+}
 function showActualOutput(data) {
   actualOutputEl.textContent = JSON.stringify(data, null, 2);
   responsePreviewEl.hidden = true;
   actualOutputEl.hidden = false;
+  setResponseKind(true);
 }
 function showResponseExample() {
   responsePreviewEl.hidden = false;
   actualOutputEl.hidden = true;
+  setResponseKind(false);
 }
 
 async function request(path, options = {}) {
@@ -192,7 +202,14 @@ function showView(name) {
   if (currentView === "aliases") { renderAliases(); refreshAliasTable(); }
   if (currentView === "session") { loadStatus(); loadAutoRefresh(); }
   if (currentView === "inbox" && !inboxLoadedOnce) { inboxLoadedOnce = true; initInbox(); }
+  if (currentView === "inbox") startMailPolling();
+  else stopMailPolling();
 }
+
+window.addEventListener("hashchange", () => {
+  const view = (window.location.hash || "").replace("#", "");
+  if (VIEW_TITLES[view] && view !== currentView) showView(view);
+});
 
 // ---------- session info ----------
 function formatSessionTime(value) {
@@ -356,6 +373,47 @@ function setSelectedOperation(operationName) {
   });
   syncRequestPreview();
   showResponseExample();
+  renderPathParamPicker();
+}
+
+// ---------- Builder path-param picker ----------
+// {anonymousId}/{guid} come from data the workbench already has cached;
+// nobody should have to excavate IDs from the JSON tab.
+const pathParamRow = $("pathParamRow");
+const pathParamSelect = $("pathParamSelect");
+const pathParamText = $("pathParamText");
+
+function templateParam(operationName = currentOperation) {
+  const path = (operations[operationName] || {}).path || "";
+  if (path.includes("{anonymousId}")) return "anonymousId";
+  if (path.includes("{guid}")) return "guid";
+  return null;
+}
+
+async function renderPathParamPicker() {
+  if (!pathParamRow) return;
+  const param = templateParam();
+  if (!param) { pathParamRow.hidden = true; return; }
+  pathParamRow.hidden = false;
+  if (param === "anonymousId" && !aliasRows.length && !aliasesLoadedOnce) await refreshAliasTable();
+  const options = ['<option value="">選擇後自動代入 path…</option>'];
+  if (param === "anonymousId") {
+    aliasRows.forEach((alias) => {
+      if (!alias.anonymousId) return;
+      const label = `${alias.label || alias.hme || alias.anonymousId} — ${alias.hme || alias.anonymousId}`;
+      options.push(`<option value="${escapeHtml(alias.anonymousId)}">${escapeHtml(label)}</option>`);
+    });
+    if (options.length === 1) options.push('<option value="" disabled>（沒有別名資料，先到「信箱清單」重新整理）</option>');
+  } else {
+    mailAllMessages.forEach((message) => {
+      if (!message.guid) return;
+      const label = `${message.subject || "(無主旨)"} — ${message.guid}`;
+      options.push(`<option value="${escapeHtml(message.guid)}">${escapeHtml(label)}</option>`);
+    });
+    if (options.length === 1) options.push('<option value="" disabled>（先到「收件匣」載入郵件）</option>');
+  }
+  pathParamSelect.innerHTML = options.join("");
+  if (pathParamText) pathParamText.textContent = param === "anonymousId" ? "選擇信箱（自動代入 anonymousId）" : "選擇郵件（自動代入 guid）";
 }
 function requestTemplate(operationName = currentOperation) {
   const operation = operations[operationName] || operations.list;
@@ -445,6 +503,7 @@ function setAliasRows(rows) {
   renderAliases();
   renderSessionInfo();
   if (inboxLoadedOnce) renderMailAliasOptions();
+  if (pathParamRow && !pathParamRow.hidden) renderPathParamPicker();
 }
 function renderAliases() {
   aliasSourceEl.textContent = JSON.stringify(aliasRows || [], null, 2);
@@ -709,6 +768,7 @@ async function loadMailMessages(force = false) {
     applyMailFilter();
     return;
   }
+  const sameFolder = folder === mailCacheFolder;
   mailListEl.innerHTML = '<div class="empty-state">載入郵件中…</div>';
   try {
     const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(folder)}&limit=100`, { headers: apiHeaders() });
@@ -723,10 +783,13 @@ async function loadMailMessages(force = false) {
     mailCacheAt = new Date();
     const total = Number(data.data.total);
     mailTotal = Number.isFinite(total) ? total : null;
-    mailDetailCache.clear();
-    currentMailGuid = null;
+    // Message details are immutable; keep the cache. Keep the open message
+    // too when it still exists in the refreshed folder.
+    if (!sameFolder || !mailAllMessages.some((message) => message.guid === currentMailGuid)) {
+      currentMailGuid = null;
+      renderMailReader(null);
+    }
     applyMailFilter();
-    renderMailReader(null);
   } catch (error) {
     renderMailError({ error: { message: String(error) } });
   }
@@ -815,6 +878,46 @@ function resetMailCache() {
   currentMailGuid = null;
 }
 
+// ---------- inbox polling ----------
+// While the inbox is visible, quietly poll the current folder and merge new
+// messages on top. Reading state (open message, detail cache) is preserved,
+// so waiting for a verification code no longer requires manual refreshes.
+function startMailPolling() {
+  if (mailPollTimer !== null) return;
+  mailPollTimer = window.setInterval(pollMailOnce, MAIL_POLL_MS);
+}
+
+function stopMailPolling() {
+  if (mailPollTimer !== null) {
+    window.clearInterval(mailPollTimer);
+    mailPollTimer = null;
+  }
+}
+
+async function pollMailOnce() {
+  if (currentView !== "inbox" || document.hidden || !mailCacheFolder) return;
+  try {
+    const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(mailCacheFolder)}&limit=100`, { headers: apiHeaders() });
+    if (response.status === 401) { stopMailPolling(); showModal(); return; }
+    const data = await response.json();
+    if (!response.ok || data.ok === false || !data.data) return; // transient; next tick retries
+    const known = new Set(mailAllMessages.map((message) => message.guid));
+    const fresh = (Array.isArray(data.data.messages) ? data.data.messages : []).filter((message) => !known.has(message.guid));
+    const total = Number(data.data.total);
+    if (Number.isFinite(total)) mailTotal = total;
+    mailCacheAt = new Date();
+    if (fresh.length) {
+      mailAllMessages = fresh.concat(mailAllMessages);
+      applyMailFilter();
+      toast(`收到 ${fresh.length} 封新郵件`, "ok");
+    }
+  } catch (error) { /* offline or missing key; next tick retries */ }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && currentView === "inbox") pollMailOnce();
+});
+
 // ---------- session actions ----------
 async function loadStatus() {
   try {
@@ -825,25 +928,57 @@ async function loadStatus() {
   } catch (error) { /* keep prior status */ }
 }
 
+async function refreshSessionAfterImport() {
+  // Deliberately NOT runSelectedOperation("refresh"): importing must not
+  // hijack the API Builder's selected endpoint or its output pane.
+  const data = await request("/v1/session/refresh", { method: "POST", headers: apiHeaders() });
+  if (data && data.data) {
+    lastSessionRefreshAt = data.data.lastRefreshAt || new Date();
+    renderSessionInfo(data.data);
+    if (data.data.needsReauth) { toast("Session 需要重新匯入", "bad"); return; }
+    if (data.data.sessionValid) toast("Session 已刷新，清單已同步", "ok");
+  }
+}
+
 async function submitImportSession() {
   const curlText = ($("importCurl").value || "").trim();
   const resultEl = $("importResult");
   resultEl.hidden = false;
   if (!curlText) { resultEl.textContent = "請先貼上 list?clientBuildNumber 請求的 Copy as cURL (bash) 或 HAR JSON。"; return; }
   resultEl.textContent = "匯入中…";
-  const data = await request("/v1/session/import", {
-    method: "POST",
-    headers: apiHeaders(),
-    body: JSON.stringify({ curl_text: curlText })
-  });
-  if (!data) { resultEl.textContent = "匯入失敗，請確認貼上的內容包含 cookie。"; return; }
+  let data = null;
+  try {
+    const response = await fetch("/v1/session/import", {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({ curl_text: curlText })
+    });
+    if (response.status === 401) {
+      showModal();
+      resultEl.textContent = "API Key 無效或已登出，請重新解鎖後再匯入。";
+      return;
+    }
+    data = await response.json();
+    if (!response.ok || data.ok === false) {
+      // Keep the full server diagnosis where the user can read it calmly;
+      // a 3-second toast is not enough for a failed high-stakes ritual.
+      show(data, true);
+      resultEl.textContent = "匯入失敗：\n" + JSON.stringify(data.error || data, null, 2);
+      return;
+    }
+    show(data);
+  } catch (error) {
+    resultEl.textContent = `匯入請求失敗（網路或伺服器問題）：${String(error)}`;
+    toast("匯入請求失敗，請確認伺服器仍在運行", "bad");
+    return;
+  }
   resultEl.textContent = JSON.stringify(data.data, null, 2);
   $("importCurl").value = "";
   const importedRegion = data.data && data.data.region === "china" ? "中國大陸（icloud.com.cn）" : "全球（icloud.com）";
   toast(`Session 已匯入（${importedRegion}），正在刷新與同步…`, "ok");
   inboxLoadedOnce = false; // next visit to inbox reloads with the new session
   resetMailCache();
-  await runSelectedOperation("refresh");
+  await refreshSessionAfterImport();
   await loadStatus();
   await refreshAliasTable();
 }
@@ -860,16 +995,25 @@ function showModal() {
 }
 function hideModal() { apiKeyModal.classList.add("hidden"); }
 async function verifyApiKey(key) {
+  // "network" must not be conflated with 401: a stopped server is not an
+  // invalid key, and telling the user their key is wrong invites overwriting
+  // a perfectly good one.
   try {
     const res = await fetch("/v1/session/status", { headers: { "X-API-Key": key } });
-    return res.status !== 401;
-  } catch { return false; }
+    return res.status === 401 ? "unauthorized" : "ok";
+  } catch { return "network"; }
+}
+function showModalError(message) {
+  modalError.style.display = "block";
+  modalError.textContent = message;
 }
 async function handleModalSubmit() {
   const key = modalApiKeyInput.value.trim();
-  if (!key) { modalError.style.display = "block"; modalError.textContent = "請輸入 API Key"; return; }
-  if (await verifyApiKey(key)) { setStoredApiKey(key); hideModal(); init(); }
-  else { modalError.style.display = "block"; modalError.textContent = "API Key 無效"; }
+  if (!key) { showModalError("請輸入 API Key"); return; }
+  const result = await verifyApiKey(key);
+  if (result === "ok") { setStoredApiKey(key); hideModal(); init(); }
+  else if (result === "network") showModalError("無法連線到伺服器，請確認服務仍在運行後重試。");
+  else showModalError("API Key 無效");
 }
 
 // ---------- wiring ----------
@@ -938,6 +1082,17 @@ endpointList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-endpoint]");
   if (button) setSelectedOperation(button.dataset.endpoint);
 });
+pathParamSelect.addEventListener("change", () => {
+  const value = pathParamSelect.value;
+  const param = templateParam();
+  if (!value || !param) return;
+  const template = (operations[currentOperation] || {}).path || "";
+  const requestData = readRequestJson(false) || requestTemplate();
+  requestData.path = template.replace(`{${param}}`, encodeURIComponent(value));
+  requestPreviewEl.value = JSON.stringify(requestData, null, 2);
+  syncCurlFromRequestEditor();
+  toast(`已代入 ${param}`, "ok");
+});
 requestPreviewEl.addEventListener("input", syncCurlFromRequestEditor);
 $("sendBtn").addEventListener("click", () => runSelectedOperation());
 
@@ -981,6 +1136,10 @@ function init() {
 
 (async () => {
   const stored = getStoredApiKey();
-  if (stored && (await verifyApiKey(stored))) { hideModal(); init(); }
-  else showModal();
+  const result = stored ? await verifyApiKey(stored) : "unauthorized";
+  if (result === "ok") { hideModal(); init(); }
+  else {
+    showModal();
+    if (result === "network") showModalError("無法連線到伺服器，請確認服務仍在運行後重試。");
+  }
 })();
