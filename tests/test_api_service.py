@@ -69,11 +69,13 @@ class FakeManager:
 class FakeMailClient:
     def __init__(self):
         self.list_calls = []
+        self.inbox_calls = 0
 
     def list_folders(self):
         return [{"guid": "f-inbox", "name": "Inbox", "role": "INBOX"}]
 
     def inbox_folder(self):
+        self.inbox_calls += 1
         return self.list_folders()[0]
 
     def list_messages(self, folder_guid, limit=20, offset=0):
@@ -197,8 +199,13 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(client.list_calls[0], {"folder": "f-x", "limit": 100, "offset": 0})
 
     def test_list_mail_messages_rejects_non_integer_limit(self):
+        client = FakeMailClient()
+
         with self.assertRaisesRegex(ValueError, "limit"):
-            list_mail_messages(FakeMailClient(), {"limit": "abc"})
+            list_mail_messages(client, {"limit": "abc"})
+
+        # validation must fail before the inbox lookup, which hits the network
+        self.assertEqual(client.inbox_calls, 0)
 
     def test_get_mail_message_requires_guid(self):
         with self.assertRaisesRegex(ValueError, "guid"):

@@ -196,7 +196,9 @@ def _json_body(body: bytes) -> dict[str, Any]:
 def _hme_error_code_and_status(message: str) -> tuple[str, HTTPStatus]:
     if "尚未匯入" in message or "Missing required config" in message or "Config file not found" in message:
         return "SESSION_MISSING", HTTPStatus.CONFLICT
-    if "HTTP 401" in message or "HTTP 403" in message:
+    # 421 means the (mail) session is no longer valid, same as 401/403;
+    # keep in sync with auto_refresh._AUTH_ERROR_MARKERS.
+    if any(marker in message for marker in ("HTTP 401", "HTTP 403", "HTTP 421")):
         return "SESSION_EXPIRED", HTTPStatus.CONFLICT
     return "ICLOUD_ERROR", HTTPStatus.BAD_GATEWAY
 

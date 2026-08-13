@@ -101,6 +101,12 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(code, "SESSION_EXPIRED")
         self.assertEqual(status, HTTPStatus.CONFLICT)
 
+    def test_mail_421_maps_to_session_expired(self):
+        code, status = _hme_error_code_and_status('HTTP 421: {"error": 2, "reason": "Invalid global session"}')
+
+        self.assertEqual(code, "SESSION_EXPIRED")
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+
     def test_render_index_markup_and_static_assets(self):
         html = render_index()
 
