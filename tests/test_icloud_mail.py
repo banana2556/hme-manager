@@ -214,6 +214,51 @@ class MailClientTests(unittest.TestCase):
         self.assertEqual(body["params"]["selected"], 10)
         self.assertEqual(body["params"]["sortorder"], "descending")
 
+    def test_list_messages_filters_by_recipient_across_pages(self):
+        page_one = [
+            {"guid": f"g{i}", "subject": f"s{i}", "to": [{"emailAddress": "other@icloud.com"}], "dateReceived": 1}
+            for i in range(100)
+        ]
+        page_one[5]["to"] = [{"name": "Hide My Email", "emailAddress": "Target.Alias@icloud.com"}]
+        page_two = [
+            {"guid": f"g{100 + i}", "subject": "x", "to": [{"emailAddress": "target.alias@icloud.com"}], "dateReceived": 1}
+            for i in range(30)
+        ]
+        transport = FakeTransport(
+            [
+                (200, {"result": {"total": 130, "messages": page_one}}),
+                (200, {"result": {"total": 130, "messages": page_two}}),
+            ]
+        )
+        client = MailClient(make_config(), transport=transport, mail_host="p119-mailws.icloud.com")
+
+        result = client.list_messages("f-inbox", limit=5, offset=0, to="target.alias@icloud.com")
+
+        self.assertEqual([m["guid"] for m in result["messages"]], ["g5", "g100", "g101", "g102", "g103"])
+        self.assertEqual(result["filteredTo"], "target.alias@icloud.com")
+        self.assertEqual(result["matchedCount"], 31)
+        self.assertEqual(result["scannedCount"], 130)
+        self.assertTrue(result["scanComplete"])
+        self.assertEqual(result["total"], 130)
+        first_call, second_call = (json.loads(call["body"]) for call in transport.calls)
+        self.assertEqual(first_call["params"]["selected"], 0)
+        self.assertEqual(second_call["params"]["selected"], 100)
+
+    def test_list_messages_filter_stops_when_page_has_enough_matches(self):
+        page_one = [
+            {"guid": f"g{i}", "subject": "hit", "to": [{"emailAddress": "alias@icloud.com"}], "dateReceived": 1}
+            for i in range(100)
+        ]
+        transport = FakeTransport([(200, {"result": {"total": 400, "messages": page_one}})])
+        client = MailClient(make_config(), transport=transport, mail_host="p119-mailws.icloud.com")
+
+        result = client.list_messages("f-inbox", limit=3, offset=0, to="alias@icloud.com")
+
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual([m["guid"] for m in result["messages"]], ["g0", "g1", "g2"])
+        self.assertFalse(result["scanComplete"])
+        self.assertEqual(result["scannedCount"], 100)
+
     def test_get_message_requests_parts_and_returns_bodies(self):
         transport = FakeTransport(
             [

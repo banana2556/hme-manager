@@ -21,6 +21,9 @@ _MAIL_HOST_RE = re.compile(r"^(?P<partition>p\d+)-maildomainws\.(?P<domain>iclou
 
 MESSAGE_PARTS = ["HEADER", "TEXT", "HTML", "ATTACHMENTS", "STRUCTURE"]
 MAX_PAGE_SIZE = 100
+# The wm API has no server-side recipient filter, so per-alias views scan the
+# most recent messages client-side; cap the scan to keep requests bounded.
+FILTER_SCAN_LIMIT = 300
 
 
 def mail_host_for(hme_host: str) -> str:
@@ -108,9 +111,57 @@ class MailClient:
                 return folder
         return folders[0]
 
-    def list_messages(self, folder_guid: str, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+    def list_messages(self, folder_guid: str, limit: int = 20, offset: int = 0, to: str | None = None) -> dict[str, Any]:
         count = max(1, min(int(limit), MAX_PAGE_SIZE))
         selected = max(0, int(offset))
+        address = str(to or "").strip().lower()
+        if address:
+            return self._list_messages_for_recipient(folder_guid, address, count, selected)
+        messages, _raw_count, total = self._fetch_message_page(folder_guid, selected, count)
+        return {
+            "folder": folder_guid,
+            "offset": selected,
+            "total": total if total is not None else selected + len(messages),
+            "messages": messages,
+        }
+
+    def _list_messages_for_recipient(self, folder_guid: str, address: str, count: int, selected: int) -> dict[str, Any]:
+        """Scan the newest messages and keep the ones addressed to a single
+        HME alias. The index rows carry the alias in `to`, so no per-message
+        detail fetches are needed."""
+        matches: list[dict[str, Any]] = []
+        scanned = 0
+        total: int | None = None
+        scan_complete = False
+        while scanned < FILTER_SCAN_LIMIT:
+            batch_size = min(MAX_PAGE_SIZE, FILTER_SCAN_LIMIT - scanned)
+            messages, raw_count, page_total = self._fetch_message_page(folder_guid, scanned, batch_size)
+            if page_total is not None:
+                total = page_total
+            for message in messages:
+                if address in str(message.get("to", "")).lower():
+                    matches.append(message)
+            scanned += raw_count
+            if raw_count < batch_size:
+                scan_complete = True
+                break
+            if total is not None and scanned >= total:
+                scan_complete = True
+                break
+            if len(matches) >= selected + count:
+                break
+        return {
+            "folder": folder_guid,
+            "offset": selected,
+            "total": total,
+            "messages": matches[selected:selected + count],
+            "filteredTo": address,
+            "matchedCount": len(matches),
+            "scannedCount": scanned,
+            "scanComplete": scan_complete,
+        }
+
+    def _fetch_message_page(self, folder_guid: str, selected: int, count: int) -> tuple[list[dict[str, Any]], int, int | None]:
         payload = self._rpc(
             "/wm/message",
             "list",
@@ -127,12 +178,7 @@ class MailClient:
         raw_messages = _find_list(payload, ("messages", "items", "message", "emails"))
         messages = [message for message in (normalize_message_summary(entry) for entry in raw_messages) if message]
         total = _first_int(payload, ("total", "totalCount", "messageCount", "messagesCount"))
-        return {
-            "folder": folder_guid,
-            "offset": selected,
-            "total": total if total is not None else selected + len(messages),
-            "messages": messages,
-        }
+        return messages, len(raw_messages), total
 
     def get_message(self, message_guid: str) -> dict[str, Any]:
         payload = self._rpc("/wm/message", "get", {"guid": message_guid, "parts": MESSAGE_PARTS})

@@ -63,12 +63,13 @@ class FakeMailClient:
     def inbox_folder(self):
         return self.list_folders()[0]
 
-    def list_messages(self, folder_guid, limit=20, offset=0):
+    def list_messages(self, folder_guid, limit=20, offset=0, to=None):
         return {
             "folder": folder_guid,
             "offset": offset,
             "total": 1,
             "messages": [{"guid": "msg 1", "from": "a@b.c", "subject": "hi", "limit": limit}],
+            **({"filteredTo": to} if to else {}),
         }
 
     def get_message(self, guid):
@@ -443,6 +444,19 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(payload["data"]["folder"], "custom-guid")
         self.assertEqual(payload["data"]["offset"], 10)
         self.assertEqual(payload["data"]["messages"][0]["limit"], 5)
+
+    def test_dispatch_private_api_filters_mail_messages_by_recipient(self):
+        status, payload = dispatch_private_api(
+            "GET",
+            "/v1/mail/messages?folder=custom-guid&to=alias%40icloud.com",
+            headers={"X-API-Key": "secret"},
+            body=b"",
+            manager=FakeManager(),
+            api_key="secret",
+        )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["data"]["filteredTo"], "alias@icloud.com")
 
     def test_dispatch_private_api_rejects_bad_mail_limit(self):
         status, payload = dispatch_private_api(

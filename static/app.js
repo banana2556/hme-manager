@@ -35,6 +35,7 @@ const autoRefreshIntervalEl = $("autoRefreshInterval");
 const autoRefreshStatusEl = $("autoRefreshStatus");
 const sessionRegionEl = $("sessionRegion");
 const mailFolderSelect = $("mailFolderSelect");
+const mailAliasSelect = $("mailAliasSelect");
 const mailListEl = $("mailList");
 const mailReaderEl = $("mailReader");
 const toastsEl = $("toasts");
@@ -51,6 +52,8 @@ let currentOperation = "list";
 let currentView = "aliases";
 let mailFolders = [];
 let mailMessages = [];
+let mailListMeta = null;
+let mailAliasFilter = "";
 let currentMailGuid = null;
 let inboxLoadedOnce = false;
 
@@ -434,6 +437,7 @@ function setAliasRows(rows) {
   lastAliasSyncAt = new Date();
   renderAliases();
   renderSessionInfo();
+  if (inboxLoadedOnce) renderMailAliasOptions();
 }
 function renderAliases() {
   aliasSourceEl.textContent = JSON.stringify(aliasRows || [], null, 2);
@@ -463,6 +467,7 @@ function renderAliases() {
       <td class="mono created-cell">${escapeHtml(created)}</td>
       <td><span class="badge ${active ? "on" : "off"}">${active ? "active" : "inactive"}</span></td>
       <td class="row-actions">
+        <button type="button" data-action="inbox-alias" data-index="${index}" title="查看此信箱的收件">收件</button>
         <button type="button" data-action="toggle-alias" data-index="${index}" data-alias-action="${toggleAction}">${toggleLabel}</button>
         <button type="button" class="danger" data-action="delete-alias" data-index="${index}">刪除</button>
       </td></tr>`;
@@ -581,10 +586,33 @@ function renderMailFolders() {
   mailFolderSelect.value = inbox.guid;
 }
 
+function renderMailAliasOptions() {
+  if (!mailAliasSelect) return;
+  const options = ['<option value="">全部郵件</option>'];
+  aliasRows.forEach((alias) => {
+    if (!alias.hme) return;
+    const label = alias.label ? `${alias.label} — ${alias.hme}` : alias.hme;
+    options.push(`<option value="${escapeHtml(alias.hme)}">${escapeHtml(label)}</option>`);
+  });
+  mailAliasSelect.innerHTML = options.join("");
+  mailAliasSelect.value = mailAliasFilter;
+  if (mailAliasSelect.value !== mailAliasFilter) {
+    // filter address is not in the alias list (e.g. deleted); keep it selectable
+    mailAliasSelect.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(mailAliasFilter)}">${escapeHtml(mailAliasFilter)}</option>`);
+    mailAliasSelect.value = mailAliasFilter;
+  }
+}
+
 function renderMailList() {
   if (!mailListEl) return;
   if (!mailMessages.length) {
-    mailListEl.innerHTML = '<div class="empty-state">此資料夾沒有郵件。</div>';
+    if (mailAliasFilter && mailListMeta && mailListMeta.filteredTo) {
+      const scanned = Number(mailListMeta.scannedCount || 0);
+      const suffix = mailListMeta.scanComplete === false ? `（僅掃描最近 ${scanned} 封）` : `（已掃描 ${scanned} 封）`;
+      mailListEl.innerHTML = `<div class="empty-state">此信箱目前沒有收件${suffix}。<br><small>${escapeHtml(mailAliasFilter)}</small></div>`;
+    } else {
+      mailListEl.innerHTML = '<div class="empty-state">此資料夾沒有郵件。</div>';
+    }
     return;
   }
   mailListEl.innerHTML = mailMessages.map((message, index) => `
@@ -654,7 +682,8 @@ async function loadMailMessages() {
   if (!folder) return;
   mailListEl.innerHTML = '<div class="empty-state">載入郵件中…</div>';
   try {
-    const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(folder)}&limit=30`, { headers: apiHeaders() });
+    const toParam = mailAliasFilter ? `&to=${encodeURIComponent(mailAliasFilter)}` : "";
+    const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(folder)}&limit=30${toParam}`, { headers: apiHeaders() });
     if (response.status === 401) { showModal(); return; }
     const data = await response.json();
     if (!response.ok || data.ok === false || !data.data) {
@@ -662,9 +691,14 @@ async function loadMailMessages() {
       return;
     }
     mailMessages = Array.isArray(data.data.messages) ? data.data.messages : [];
+    mailListMeta = data.data;
     currentMailGuid = null;
     renderMailList();
     renderMailReader(null);
+    if (mailAliasFilter && data.data.filteredTo) {
+      const scanned = Number(data.data.scannedCount || 0);
+      setStatus(`已在最近 ${scanned} 封郵件中找到 ${Number(data.data.matchedCount || 0)} 封`);
+    }
   } catch (error) {
     renderMailError({ error: { message: String(error) } });
   }
@@ -701,8 +735,21 @@ function renderMailError(data) {
 
 async function initInbox() {
   if (!mailFolderSelect) return;
+  if (!aliasRows.length) await refreshAliasTable();
+  renderMailAliasOptions();
   const loaded = await loadMailFolders();
   if (loaded) await loadMailMessages();
+}
+
+async function openInboxForAlias(hme) {
+  mailAliasFilter = String(hme || "");
+  if (inboxLoadedOnce) {
+    renderMailAliasOptions();
+    showView("inbox");
+    await loadMailMessages();
+  } else {
+    showView("inbox"); // initInbox picks up mailAliasFilter
+  }
 }
 
 // ---------- session actions ----------
@@ -770,6 +817,10 @@ $("refreshListBtn").addEventListener("click", refreshAliasTable);
 $("exportCsvBtn").addEventListener("click", exportAliasesCsv);
 $("refreshMailBtn").addEventListener("click", async () => { await loadMailFolders(); await loadMailMessages(); });
 mailFolderSelect.addEventListener("change", loadMailMessages);
+mailAliasSelect.addEventListener("change", () => {
+  mailAliasFilter = mailAliasSelect.value || "";
+  loadMailMessages();
+});
 mailListEl.addEventListener("click", (event) => {
   const item = event.target.closest("[data-mail-index]");
   if (item) openMailMessage(Number(item.dataset.mailIndex));
@@ -794,13 +845,15 @@ aliasTabs.addEventListener("click", (event) => {
 });
 tableEl.addEventListener("click", async (event) => {
   const copyButton = event.target.closest('[data-action="copy-alias"]');
+  const inboxButton = event.target.closest('[data-action="inbox-alias"]');
   const toggleButton = event.target.closest('[data-action="toggle-alias"]');
   const deleteButton = event.target.closest('[data-action="delete-alias"]');
-  const button = copyButton || toggleButton || deleteButton;
+  const button = copyButton || inboxButton || toggleButton || deleteButton;
   if (!button) return;
   const alias = filterAliases(aliasRows)[Number(button.dataset.index)];
   if (!alias) return;
   if (copyButton) { await copyText(alias.hme || "", "已複製信箱"); return; }
+  if (inboxButton) { await openInboxForAlias(alias.hme || ""); return; }
   if (!alias.anonymousId) return;
   if (toggleButton) {
     const action = toggleButton.dataset.aliasAction || "disable";

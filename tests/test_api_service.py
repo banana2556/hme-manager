@@ -78,8 +78,8 @@ class FakeMailClient:
         self.inbox_calls += 1
         return self.list_folders()[0]
 
-    def list_messages(self, folder_guid, limit=20, offset=0):
-        self.list_calls.append({"folder": folder_guid, "limit": limit, "offset": offset})
+    def list_messages(self, folder_guid, limit=20, offset=0, to=None):
+        self.list_calls.append({"folder": folder_guid, "limit": limit, "offset": offset, "to": to})
         return {"folder": folder_guid, "offset": offset, "total": 0, "messages": []}
 
     def get_message(self, guid):
@@ -189,14 +189,21 @@ class ApiServiceTests(unittest.TestCase):
         response = list_mail_messages(client, {})
 
         self.assertEqual(response["data"]["folder"], "f-inbox")
-        self.assertEqual(client.list_calls[0], {"folder": "f-inbox", "limit": 20, "offset": 0})
+        self.assertEqual(client.list_calls[0], {"folder": "f-inbox", "limit": 20, "offset": 0, "to": None})
 
     def test_list_mail_messages_clamps_limit_and_offset(self):
         client = FakeMailClient()
 
         list_mail_messages(client, {"folder": "f-x", "limit": "999", "offset": "-3"})
 
-        self.assertEqual(client.list_calls[0], {"folder": "f-x", "limit": 100, "offset": 0})
+        self.assertEqual(client.list_calls[0], {"folder": "f-x", "limit": 100, "offset": 0, "to": None})
+
+    def test_list_mail_messages_passes_recipient_filter(self):
+        client = FakeMailClient()
+
+        list_mail_messages(client, {"folder": "f-x", "to": " alias@icloud.com "})
+
+        self.assertEqual(client.list_calls[0]["to"], "alias@icloud.com")
 
     def test_list_mail_messages_rejects_non_integer_limit(self):
         client = FakeMailClient()

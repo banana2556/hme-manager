@@ -96,7 +96,7 @@ docker compose up -d --build
 | POST | `/v1/aliases/{id}/disable` · `/enable` · `/delete` | 停用 / 啟用 / 刪除 |
 | GET | `/v1/aliases/export.csv` | 匯出 CSV |
 | GET | `/v1/mail/folders` | 郵件資料夾清單 |
-| GET | `/v1/mail/messages?folder=&limit=&offset=` | 郵件清單（`folder` 省略時自動用收件匣） |
+| GET | `/v1/mail/messages?folder=&limit=&offset=&to=` | 郵件清單（`folder` 省略時自動用收件匣；`to` 可依收件地址過濾，例如單一 HME 別名） |
 | GET | `/v1/mail/messages/{guid}` | 讀取單封郵件（text/html/附件中繼資料） |
 | GET · POST | `/v1/auto-refresh` | 讀取或更新自動刷新設定 |
 | POST | `/v1/auto-refresh/run` | 立即執行一次刷新 |
@@ -110,6 +110,8 @@ docker compose up -d --build
 ## 收件匣讀信
 
 「收件匣」分頁會用同一份 Session 讀取 iCloud 網頁郵件（JSON-RPC over `pNN-mailws.icloud.com`）。郵件服務的分區（`pNN`）與 HME 分區不一定相同，因此會先向 iCloud `setup` 服務查詢正確的郵件主機，查詢失敗才退回推導值。開啟一封郵件時會自動掃描主旨／內文，偵測到 4–8 位數的驗證碼即可一鍵複製；HTML 內文會放在 `sandbox` 的 iframe 中顯示，避免遠端內容存取工作台。
+
+收件匣可依 **HME 別名** 過濾：用工具列的信箱下拉選單，或在「信箱清單」點某列的 **收件** 直接跳轉。過濾時會掃描該資料夾最近 300 封郵件的收件人欄位（Apple 私有 API 沒有伺服器端收件人搜尋），回應會帶 `matchedCount` / `scannedCount` / `scanComplete` 說明掃描範圍。
 
 若收件匣回報 `SESSION_MISSING` 或郵件授權不足，請在 iCloud 網頁先開啟一次「郵件」再重新匯入 Session（cookie 需包含郵件授權）。
 

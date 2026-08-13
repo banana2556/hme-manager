@@ -77,12 +77,13 @@ def list_mail_messages(client: Any, query: Mapping[str, Any]) -> dict[str, Any]:
     # Validate paging params before inbox_folder(), which hits the network.
     limit = _int_param(query, "limit", default=20, minimum=1, maximum=100)
     offset = _int_param(query, "offset", default=0, minimum=0, maximum=None)
+    to = str(query.get("to") or "").strip()
     folder = str(query.get("folder") or "").strip()
     if not folder:
         folder = str(client.inbox_folder().get("guid") or "")
     if not folder:
         raise ValueError("folder is required (no inbox folder could be detected)")
-    return ok_response(client.list_messages(folder, limit=limit, offset=offset))
+    return ok_response(client.list_messages(folder, limit=limit, offset=offset, to=to or None))
 
 
 def get_mail_message(client: Any, message_guid: str) -> dict[str, Any]:
