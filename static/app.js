@@ -43,6 +43,7 @@ const toastsEl = $("toasts");
 const VIEW_TITLES = { aliases: "信箱清單", inbox: "收件匣", builder: "API Builder", session: "Session & 自動刷新" };
 
 let aliasRows = [];
+let aliasesLoadedOnce = false;
 let lastSessionStatus = null;
 let lastAliasSyncAt = null;
 let lastSessionRefreshAt = null;
@@ -439,6 +440,7 @@ function filterAliases(aliases) {
 }
 function setAliasRows(rows) {
   aliasRows = Array.isArray(rows) ? rows : [];
+  aliasesLoadedOnce = true;
   lastAliasSyncAt = new Date();
   renderAliases();
   renderSessionInfo();
@@ -449,9 +451,10 @@ function renderAliases() {
   if (aliasCountSub) aliasCountSub.textContent = `${aliasRows.length} 筆`;
   const filtered = filterAliases(aliasRows);
   if (!filtered.length) {
-    const hint = aliasRows.length
-      ? "沒有符合搜尋的信箱。"
-      : '目前沒有信箱資料。請至「Session &amp; 自動刷新」匯入或刷新 Session，再按「重新整理」。';
+    let hint;
+    if (!aliasesLoadedOnce) hint = "載入信箱清單中…";
+    else if (aliasRows.length) hint = "沒有符合搜尋的信箱。";
+    else hint = '目前沒有信箱資料。請至「Session &amp; 自動刷新」匯入或刷新 Session，再按「重新整理」。';
     tableEl.innerHTML = `<div class="empty-state">${hint}</div>`;
     return;
   }
@@ -491,6 +494,8 @@ async function refreshAliasTable() {
   } catch (error) {
     setStatus("清單刷新失敗", true);
     return null;
+  } finally {
+    if (!aliasesLoadedOnce) { aliasesLoadedOnce = true; renderAliases(); }
   }
 }
 async function runAliasAction(alias, action) {
