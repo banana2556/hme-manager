@@ -111,7 +111,9 @@ docker compose up -d --build
 
 「收件匣」分頁會用同一份 Session 讀取 iCloud 網頁郵件（JSON-RPC over `pNN-mailws.icloud.com`）。郵件服務的分區（`pNN`）與 HME 分區不一定相同，因此會先向 iCloud `setup` 服務查詢正確的郵件主機，查詢失敗才退回推導值。開啟一封郵件時會自動掃描主旨／內文，偵測到 4–8 位數的驗證碼即可一鍵複製；HTML 內文會放在 `sandbox` 的 iframe 中顯示，避免遠端內容存取工作台。
 
-收件匣可依 **HME 別名** 過濾：用工具列的信箱下拉選單，或在「信箱清單」點某列的 **收件** 直接跳轉。過濾時會掃描該資料夾最近 300 封郵件的收件人欄位（Apple 私有 API 沒有伺服器端收件人搜尋），回應會帶 `matchedCount` / `scannedCount` / `scanComplete` 說明掃描範圍。
+收件匣可依 **HME 別名** 過濾：用工具列的信箱下拉選單，或在「信箱清單」點某列的 **收件** 直接跳轉。工作台會把資料夾最近的郵件索引**快取在前端**（一次 100 封，可按「載入更早的郵件」續抓），切換別名時直接在本地過濾、不重新請求；「重新整理」才會重抓。郵件內文以原始 RFC822 來源解析（`GET /wm/message?guid=`），並在開啟後快取。
+
+API 消費者也可用 `/v1/mail/messages?to=` 做伺服器端過濾：會掃描該資料夾最近 300 封的收件人欄位（Apple 私有 API 沒有伺服器端收件人搜尋），回應帶 `matchedCount` / `scannedCount` / `scanComplete` 說明掃描範圍。
 
 若收件匣回報 `SESSION_MISSING` 或郵件授權不足，請在 iCloud 網頁先開啟一次「郵件」再重新匯入 Session（cookie 需包含郵件授權）。
 

@@ -259,9 +259,53 @@ class MailClientTests(unittest.TestCase):
         self.assertFalse(result["scanComplete"])
         self.assertEqual(result["scannedCount"], 100)
 
-    def test_get_message_requests_parts_and_returns_bodies(self):
+    def test_get_message_parses_raw_rfc822_source(self):
+        raw = (
+            b"From: ChatGPT <noreply@openai.com>\r\n"
+            b"To: Hide My Email <alias@icloud.com>\r\n"
+            b"Subject: =?utf-8?b?6amX6K2J56K8IDEyMzQ1Ng==?=\r\n"
+            b"Date: Thu, 13 Aug 2026 10:00:00 +0800\r\n"
+            b"MIME-Version: 1.0\r\n"
+            b'Content-Type: multipart/mixed; boundary="BOUND"\r\n'
+            b"\r\n"
+            b"--BOUND\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n"
+            b"\r\n"
+            b"Your code is 123456\r\n"
+            b"--BOUND\r\n"
+            b"Content-Type: text/html; charset=utf-8\r\n"
+            b"\r\n"
+            b"<p>Your code is <b>123456</b></p>\r\n"
+            b"--BOUND\r\n"
+            b"Content-Type: application/pdf\r\n"
+            b'Content-Disposition: attachment; filename="a.pdf"\r\n'
+            b"Content-Transfer-Encoding: base64\r\n"
+            b"\r\n"
+            b"JVBERi0xLjQ=\r\n"
+            b"--BOUND--\r\n"
+        )
+        transport = FakeTransport([(200, raw)])
+        client = MailClient(make_config(), transport=transport, mail_host="p119-mailws.icloud.com")
+
+        detail = client.get_message("message:INBOX/238")
+
+        call = transport.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertTrue(call.get("raw"))
+        self.assertIn("guid=message%3AINBOX%2F238", call["url"])
+        self.assertEqual(detail["guid"], "message:INBOX/238")
+        self.assertEqual(detail["subject"], "驗證碼 123456")
+        self.assertEqual(detail["from"], "ChatGPT <noreply@openai.com>")
+        self.assertEqual(detail["to"], "Hide My Email <alias@icloud.com>")
+        self.assertIn("Your code is 123456", detail["textBody"])
+        self.assertIn("<b>123456</b>", detail["htmlBody"])
+        self.assertEqual(detail["attachments"], [{"filename": "a.pdf", "mimeType": "application/pdf", "size": 8}])
+        self.assertTrue(detail["date"].startswith("2026-08-13T10:00:00"))
+
+    def test_get_message_falls_back_to_rpc_detail_when_raw_unavailable(self):
         transport = FakeTransport(
             [
+                (500, "boom"),
                 (
                     200,
                     {
@@ -271,23 +315,18 @@ class MailClientTests(unittest.TestCase):
                                 "subject": "Your code",
                                 "from": "noreply@openai.com",
                                 "textBody": "Your code is 123456",
-                                "htmlBody": "<p>Your code is <b>123456</b></p>",
-                                "attachments": [{"filename": "a.pdf", "mimeType": "application/pdf", "size": 123}],
                             }
                         }
                     },
-                )
+                ),
             ]
         )
         client = MailClient(make_config(), transport=transport, mail_host="p119-mailws.icloud.com")
 
         detail = client.get_message("m-1")
 
-        self.assertEqual(detail["guid"], "m-1")
         self.assertEqual(detail["textBody"], "Your code is 123456")
-        self.assertIn("<b>123456</b>", detail["htmlBody"])
-        self.assertEqual(detail["attachments"][0]["filename"], "a.pdf")
-        body = json.loads(transport.calls[0]["body"])
+        body = json.loads(transport.calls[1]["body"])
         self.assertEqual(body["method"], "get")
         self.assertEqual(body["params"]["guid"], "m-1")
         self.assertIn("HTML", body["params"]["parts"])

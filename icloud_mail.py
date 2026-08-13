@@ -8,6 +8,9 @@ is derived from the imported maildomainws host, so no extra setup is needed.
 
 from __future__ import annotations
 
+import email
+import email.policy
+import email.utils
 import json
 import re
 import time
@@ -181,12 +184,51 @@ class MailClient:
         return messages, len(raw_messages), total
 
     def get_message(self, message_guid: str) -> dict[str, Any]:
+        # The JSON-RPC `get` only returns headers/metadata (its `parts` come
+        # back empty), so fetch the raw RFC822 source instead and parse it
+        # locally. Falls back to the RPC detail if the raw channel breaks.
+        try:
+            raw = self._fetch_raw_source(message_guid)
+            return parse_rfc822_message(raw, fallback_guid=message_guid)
+        except HmeError:
+            pass
         payload = self._rpc("/wm/message", "get", {"guid": message_guid, "parts": MESSAGE_PARTS})
         record = _find_message_record(payload) or (payload if isinstance(payload, dict) else {})
         detail = normalize_message_detail(record, fallback_guid=message_guid)
         if detail is None:
             raise HmeError("Unexpected message response from iCloud Mail: no message payload found")
         return detail
+
+    def _fetch_raw_source(self, message_guid: str) -> bytes:
+        """GET /wm/message?guid=<message guid> returns the full message/rfc822 source."""
+        query = urllib.parse.urlencode(
+            {
+                "clientBuildNumber": self.config.client_build_number,
+                "clientMasteringNumber": self.config.client_mastering_number,
+                "clientId": self.config.client_id,
+                "dsid": self.config.dsid,
+                "guid": message_guid,
+            }
+        )
+        request = {
+            "method": "GET",
+            "url": f"https://{self.host}/wm/message?{query}",
+            "headers": {
+                "Accept": "*/*",
+                "Origin": self.config.origin,
+                "Referer": f"{self.config.origin}/mail/",
+                "User-Agent": self.config.user_agent,
+                "Cookie": self.config.cookie,
+            },
+            "raw": True,
+            "timeout": 30,
+        }
+        status, payload = self.transport(request)
+        if status >= 400:
+            raise HmeError(f"HTTP {status}: {_safe_error(payload)}")
+        if isinstance(payload, (bytes, bytearray)):
+            return bytes(payload)
+        return str(payload).encode("utf-8", errors="replace")
 
     def _rpc(self, path: str, method: str, params: dict[str, Any]) -> Any:
         body = {
@@ -280,6 +322,72 @@ def _unwrap_rpc(response: Any) -> Any:
                 raise HmeError(f"iCloud Mail returned an error: {_safe_error(inner_error)}")
             return first.get("result") or first.get("response") or first.get("data") or first
     return response
+
+
+# ---------- RFC822 source parsing ----------
+
+
+def parse_rfc822_message(raw: bytes, fallback_guid: str) -> dict[str, Any]:
+    message = email.message_from_bytes(raw, policy=email.policy.default)
+    text_body = ""
+    html_body = ""
+    attachments: list[dict[str, Any]] = []
+    for part in message.walk():
+        if part.is_multipart():
+            continue
+        content_type = part.get_content_type()
+        filename = part.get_filename()
+        disposition = part.get_content_disposition()
+        if disposition == "attachment" or (filename and disposition != "inline"):
+            payload = part.get_payload(decode=True) or b""
+            attachments.append(
+                {
+                    "filename": filename or "",
+                    "mimeType": content_type,
+                    "size": len(payload),
+                }
+            )
+            continue
+        if content_type == "text/plain" and not text_body:
+            text_body = _decode_mime_part(part)
+        elif content_type == "text/html" and not html_body:
+            html_body = _decode_mime_part(part)
+    date_iso: str | None = None
+    if message["Date"]:
+        try:
+            date_iso = email.utils.parsedate_to_datetime(str(message["Date"])).isoformat()
+        except (TypeError, ValueError):
+            date_iso = str(message["Date"]).strip()
+    subject = str(message.get("Subject", "") or "").strip()
+    return {
+        "guid": fallback_guid,
+        "from": str(message.get("From", "") or "").strip(),
+        "to": str(message.get("To", "") or "").strip(),
+        "subject": subject or "(無主旨)",
+        "date": date_iso,
+        "snippet": "",
+        "isRead": True,
+        "textBody": text_body,
+        "htmlBody": html_body,
+        "attachments": attachments,
+    }
+
+
+def _decode_mime_part(part: Any) -> str:
+    try:
+        content = part.get_content()
+        if isinstance(content, str):
+            return content
+    except Exception:
+        pass
+    payload = part.get_payload(decode=True)
+    if isinstance(payload, (bytes, bytearray)):
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            return bytes(payload).decode(charset, errors="replace")
+        except LookupError:
+            return bytes(payload).decode("utf-8", errors="replace")
+    return ""
 
 
 # ---------- tolerant payload normalization ----------

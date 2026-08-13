@@ -51,8 +51,12 @@ let autoRefreshCountdownTimer = null;
 let currentOperation = "list";
 let currentView = "aliases";
 let mailFolders = [];
-let mailMessages = [];
-let mailListMeta = null;
+let mailMessages = [];        // currently displayed (after alias filter)
+let mailAllMessages = [];     // cached messages of the current folder
+let mailCacheFolder = null;
+let mailCacheAt = null;
+let mailTotal = null;
+const mailDetailCache = new Map();
 let mailAliasFilter = "";
 let currentMailGuid = null;
 let inboxLoadedOnce = false;
@@ -182,6 +186,7 @@ function showView(name) {
     item.classList.toggle("active", item.dataset.view === currentView);
   });
   viewTitleEl.textContent = VIEW_TITLES[currentView];
+  if (aliasCountSub) aliasCountSub.hidden = currentView !== "aliases";
   window.location.hash = currentView;
   if (currentView === "aliases") { renderAliases(); refreshAliasTable(); }
   if (currentView === "session") { loadStatus(); loadAutoRefresh(); }
@@ -603,16 +608,18 @@ function renderMailAliasOptions() {
   }
 }
 
+function mailLoadMoreHtml() {
+  if (!mailTotal || mailAllMessages.length >= mailTotal) return "";
+  return `<button type="button" class="load-more" data-action="load-more-mail">載入更早的郵件（已快取 ${mailAllMessages.length}/${mailTotal}）</button>`;
+}
+
 function renderMailList() {
   if (!mailListEl) return;
   if (!mailMessages.length) {
-    if (mailAliasFilter && mailListMeta && mailListMeta.filteredTo) {
-      const scanned = Number(mailListMeta.scannedCount || 0);
-      const suffix = mailListMeta.scanComplete === false ? `（僅掃描最近 ${scanned} 封）` : `（已掃描 ${scanned} 封）`;
-      mailListEl.innerHTML = `<div class="empty-state">此信箱目前沒有收件${suffix}。<br><small>${escapeHtml(mailAliasFilter)}</small></div>`;
-    } else {
-      mailListEl.innerHTML = '<div class="empty-state">此資料夾沒有郵件。</div>';
-    }
+    const empty = mailAliasFilter
+      ? `<div class="empty-state">此信箱在已快取的 ${mailAllMessages.length} 封中沒有收件。<br><small class="mono">${escapeHtml(mailAliasFilter)}</small></div>`
+      : '<div class="empty-state">此資料夾沒有郵件。</div>';
+    mailListEl.innerHTML = empty + mailLoadMoreHtml();
     return;
   }
   mailListEl.innerHTML = mailMessages.map((message, index) => `
@@ -620,7 +627,19 @@ function renderMailList() {
       <span class="mail-item-top"><span class="mail-from">${escapeHtml(message.from || "(未知寄件人)")}</span><span class="mail-date">${escapeHtml(formatMailTime(message.date))}</span></span>
       <span class="mail-subject">${escapeHtml(message.subject || "(無主旨)")}</span>
       ${message.snippet ? `<span class="mail-snippet">${escapeHtml(message.snippet)}</span>` : ""}
-    </button>`).join("");
+    </button>`).join("") + mailLoadMoreHtml();
+}
+
+function applyMailFilter() {
+  const key = (mailAliasFilter || "").trim().toLowerCase();
+  mailMessages = key
+    ? mailAllMessages.filter((message) => String(message.to || "").toLowerCase().includes(key))
+    : mailAllMessages.slice();
+  renderMailList();
+  const at = mailCacheAt ? mailCacheAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  setStatus(key
+    ? `顯示 ${mailMessages.length} 封（快取 ${mailAllMessages.length} 封 · ${at}）`
+    : `已快取 ${mailAllMessages.length} 封（${at}）`);
 }
 
 function renderMailReader(message) {
@@ -677,30 +696,56 @@ async function loadMailFolders() {
   }
 }
 
-async function loadMailMessages() {
+async function loadMailMessages(force = false) {
   const folder = mailFolderSelect ? mailFolderSelect.value : "";
   if (!folder) return;
+  // Same folder already cached: filter locally, no network round-trip.
+  if (!force && folder === mailCacheFolder && mailAllMessages.length) {
+    applyMailFilter();
+    return;
+  }
   mailListEl.innerHTML = '<div class="empty-state">載入郵件中…</div>';
   try {
-    const toParam = mailAliasFilter ? `&to=${encodeURIComponent(mailAliasFilter)}` : "";
-    const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(folder)}&limit=30${toParam}`, { headers: apiHeaders() });
+    const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(folder)}&limit=100`, { headers: apiHeaders() });
     if (response.status === 401) { showModal(); return; }
     const data = await response.json();
     if (!response.ok || data.ok === false || !data.data) {
       renderMailError(data);
       return;
     }
-    mailMessages = Array.isArray(data.data.messages) ? data.data.messages : [];
-    mailListMeta = data.data;
+    mailAllMessages = Array.isArray(data.data.messages) ? data.data.messages : [];
+    mailCacheFolder = folder;
+    mailCacheAt = new Date();
+    const total = Number(data.data.total);
+    mailTotal = Number.isFinite(total) ? total : null;
+    mailDetailCache.clear();
     currentMailGuid = null;
-    renderMailList();
+    applyMailFilter();
     renderMailReader(null);
-    if (mailAliasFilter && data.data.filteredTo) {
-      const scanned = Number(data.data.scannedCount || 0);
-      setStatus(`已在最近 ${scanned} 封郵件中找到 ${Number(data.data.matchedCount || 0)} 封`);
-    }
   } catch (error) {
     renderMailError({ error: { message: String(error) } });
+  }
+}
+
+async function loadMoreMailMessages(button) {
+  if (!mailCacheFolder) return;
+  if (button) { button.disabled = true; button.textContent = "載入中…"; }
+  try {
+    const offset = mailAllMessages.length;
+    const response = await fetch(`/v1/mail/messages?folder=${encodeURIComponent(mailCacheFolder)}&limit=100&offset=${offset}`, { headers: apiHeaders() });
+    if (response.status === 401) { showModal(); return; }
+    const data = await response.json();
+    if (!response.ok || data.ok === false || !data.data) { renderMailError(data); return; }
+    const known = new Set(mailAllMessages.map((message) => message.guid));
+    const fresh = (Array.isArray(data.data.messages) ? data.data.messages : []).filter((message) => !known.has(message.guid));
+    mailAllMessages = mailAllMessages.concat(fresh);
+    const total = Number(data.data.total);
+    if (Number.isFinite(total)) mailTotal = total;
+    if (!fresh.length) mailTotal = mailAllMessages.length; // server has no more for us
+    applyMailFilter();
+  } catch (error) {
+    toast(`載入更多失敗：${String(error)}`, "bad");
+    renderMailList();
   }
 }
 
@@ -709,6 +754,8 @@ async function openMailMessage(index) {
   if (!summary || !summary.guid) return;
   currentMailGuid = summary.guid;
   renderMailList();
+  const cached = mailDetailCache.get(summary.guid);
+  if (cached) { renderMailReader({ ...summary, ...cached }); return; }
   mailReaderEl.innerHTML = '<div class="empty-state">讀取郵件中…</div>';
   try {
     const response = await fetch(`/v1/mail/messages/${encodeURIComponent(summary.guid)}`, { headers: apiHeaders() });
@@ -719,6 +766,7 @@ async function openMailMessage(index) {
       toast(data && data.error && data.error.message ? data.error.message : "讀取郵件失敗，僅顯示摘要", "warn");
       return;
     }
+    mailDetailCache.set(summary.guid, data.data);
     renderMailReader({ ...summary, ...data.data });
   } catch (error) {
     toast(`讀取郵件失敗：${String(error)}`, "bad");
@@ -746,10 +794,20 @@ async function openInboxForAlias(hme) {
   if (inboxLoadedOnce) {
     renderMailAliasOptions();
     showView("inbox");
-    await loadMailMessages();
+    await loadMailMessages(); // cached folder → instant local filter
   } else {
     showView("inbox"); // initInbox picks up mailAliasFilter
   }
+}
+
+function resetMailCache() {
+  mailAllMessages = [];
+  mailMessages = [];
+  mailCacheFolder = null;
+  mailCacheAt = null;
+  mailTotal = null;
+  mailDetailCache.clear();
+  currentMailGuid = null;
 }
 
 // ---------- session actions ----------
@@ -779,6 +837,7 @@ async function submitImportSession() {
   const importedRegion = data.data && data.data.region === "china" ? "中國大陸（icloud.com.cn）" : "全球（icloud.com）";
   toast(`Session 已匯入（${importedRegion}），正在刷新與同步…`, "ok");
   inboxLoadedOnce = false; // next visit to inbox reloads with the new session
+  resetMailCache();
   await runSelectedOperation("refresh");
   await loadStatus();
   await refreshAliasTable();
@@ -815,13 +874,16 @@ $("logoutBtn").addEventListener("click", () => { localStorage.removeItem(STORAGE
 aliasFilterInput.addEventListener("input", renderAliases);
 $("refreshListBtn").addEventListener("click", refreshAliasTable);
 $("exportCsvBtn").addEventListener("click", exportAliasesCsv);
-$("refreshMailBtn").addEventListener("click", async () => { await loadMailFolders(); await loadMailMessages(); });
-mailFolderSelect.addEventListener("change", loadMailMessages);
+$("refreshMailBtn").addEventListener("click", async () => { await loadMailFolders(); await loadMailMessages(true); });
+mailFolderSelect.addEventListener("change", () => loadMailMessages());
 mailAliasSelect.addEventListener("change", () => {
   mailAliasFilter = mailAliasSelect.value || "";
-  loadMailMessages();
+  if (mailCacheFolder && mailAllMessages.length) applyMailFilter(); // instant, no refetch
+  else loadMailMessages();
 });
 mailListEl.addEventListener("click", (event) => {
+  const moreButton = event.target.closest('[data-action="load-more-mail"]');
+  if (moreButton) { loadMoreMailMessages(moreButton); return; }
   const item = event.target.closest("[data-mail-index]");
   if (item) openMailMessage(Number(item.dataset.mailIndex));
 });

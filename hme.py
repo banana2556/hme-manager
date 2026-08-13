@@ -158,8 +158,11 @@ def default_transport(request: dict[str, Any]) -> tuple[int, Any]:
     )
     try:
         with urllib.request.urlopen(req, timeout=request.get("timeout", 30)) as response:
-            payload = response.read().decode("utf-8")
-            return response.status, json.loads(payload)
+            data = response.read()
+            if request.get("raw"):
+                # e.g. message/rfc822 sources; caller parses the bytes itself
+                return response.status, data
+            return response.status, json.loads(data.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         payload = exc.read().decode("utf-8", errors="replace")
         try:
